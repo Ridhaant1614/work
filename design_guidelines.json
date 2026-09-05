@@ -1,0 +1,205 @@
+{
+  "app_name": "Soneja CRM",
+  "personality": "1 iOS-Native Clean",
+  "personality_one_liner": "A dense, professional, and trustworthy iOS-native dashboard maximizing legibility for financial data and inventory tracking.",
+  "color": {
+    "light": {
+      "surface": "#FFFFFF",
+      "onSurface": "#111827",
+      "surfaceSecondary": "#F9FAFB",
+      "onSurfaceSecondary": "#374151",
+      "surfaceTertiary": "#F3F4F6",
+      "onSurfaceTertiary": "#4B5563",
+      "surfaceInverse": "#1F2937",
+      "onSurfaceInverse": "#F9FAFB",
+      "brand": "#0F4C5C",
+      "brandPrimary": "#0F4C5C",
+      "onBrandPrimary": "#FFFFFF",
+      "brandSecondary": "#156175",
+      "onBrandSecondary": "#FFFFFF",
+      "brandTertiary": "#E0F2F1",
+      "onBrandTertiary": "#0F4C5C",
+      "success": "#059669",
+      "onSuccess": "#FFFFFF",
+      "warning": "#D97706",
+      "onWarning": "#FFFFFF",
+      "error": "#DC2626",
+      "onError": "#FFFFFF",
+      "info": "#2563EB",
+      "onInfo": "#FFFFFF",
+      "border": "#E5E7EB",
+      "borderStrong": "#D1D5DB",
+      "divider": "#F3F4F6",
+      "muted": "#6B7280",
+      "onBrand": "#FFFFFF"
+    },
+    "dark": {
+      "surface": "#111827",
+      "onSurface": "#F9FAFB",
+      "surfaceSecondary": "#1F2937",
+      "onSurfaceSecondary": "#E5E7EB",
+      "surfaceTertiary": "#374151",
+      "onSurfaceTertiary": "#D1D5DB",
+      "surfaceInverse": "#F9FAFB",
+      "onSurfaceInverse": "#111827",
+      "brand": "#4E8D9C",
+      "brandPrimary": "#4E8D9C",
+      "onBrandPrimary": "#111827",
+      "brandSecondary": "#68A5B3",
+      "onBrandSecondary": "#111827",
+      "brandTertiary": "#1C3D45",
+      "onBrandTertiary": "#86C7D7",
+      "success": "#10B981",
+      "onSuccess": "#111827",
+      "warning": "#F59E0B",
+      "onWarning": "#111827",
+      "error": "#EF4444",
+      "onError": "#111827",
+      "info": "#3B82F6",
+      "onInfo": "#111827",
+      "border": "#374151",
+      "borderStrong": "#4B5563",
+      "divider": "#1F2937",
+      "muted": "#9CA3AF",
+      "onBrand": "#111827"
+    }
+  },
+  "typography": {
+    "displayFontFamily": "Plus Jakarta Sans",
+    "textFontFamily": "Satoshi",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Generous vertical breathing room for dense data blocks. Maintain clean iOS native layout and pad safe areas.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 6,
+    "md": 12,
+    "lg": 20,
+    "pill": 999
+  },
+  "shadow_tier": "1",
+  "navigation": "bottom_tabs",
+  "icon_set": "Phosphor",
+  "glassmorphism": {
+    "enabled": true,
+    "do's": [
+      "Use glass on bottom tab bar when content scrolls behind it.",
+      "Use glass for sticky sticky headers over scrolling content.",
+      "Apply to pinned chip filter rows (like All/Pending/Completed) on list pages."
+    ],
+    "dont's": [
+      "Do not apply glass to data rows, simple forms, or primary interactive cards.",
+      "Do not blur entire body content sections."
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Dashboard",
+      "purpose": "A commanding overview showing total sales, profit, payables/receivables, and quick inventory alerts.",
+      "states": {
+        "loading": "Skeleton UI matching the widget layout.",
+        "empty": "Empty state illustration with text 'No data logged today' (only if brand new).",
+        "error": "Error toast with a 'Retry Data Fetch' inline button."
+      },
+      "layout": "Use a sticky header displaying 'Soneja Electronics' logo and user avatar. Below, 2-column grid for primary metrics (Sales, Profit, Payables, Receivables) with bold tabular numbers. Follow with horizontally scrolling 'Low Stock Alerts' cards. Include a glassmorphism sticky header if the view scrolls."
+    },
+    {
+      "name": "Sales Orders",
+      "purpose": "List view of all invoices to dealers with part-payment and aging tracking.",
+      "states": {
+        "loading": "Centered spinner over list placeholder.",
+        "empty": "Empty clipboard illustration + 'No Sales Orders Found'.",
+        "error": "Message 'Failed to load orders' + Retry button."
+      },
+      "layout": "Sticky glass filter chip row at the top (All, Unpaid, Partial, Cleared). List items use an iOS-native `ListTile` approach: Order Ref on top left, Dealer Name on bottom left, total INR on top right, and a status badge (paid/unpaid/partial) on bottom right. Floating Action Button (glass over brandTertiary) to create a new order."
+    },
+    {
+      "name": "Inventory",
+      "purpose": "Live catalog of SKUs/Models, quantities, and GST-inclusive costing.",
+      "states": {
+        "loading": "Skeleton list rows.",
+        "empty": "Empty box illustration + 'Inventory is empty. Add Products.'",
+        "error": "Readable network error message."
+      },
+      "layout": "Search bar at the top followed by an alphabetical list of products. Each row displays the TV model thumbnail, SKU name, Qty on hand in bold, and a low-stock badge if applicable."
+    },
+    {
+      "name": "Dealer Network",
+      "purpose": "Directory of shop owners/dealers with quick action buttons for communication.",
+      "states": {
+        "loading": "Spinner.",
+        "empty": "Empty state + 'Add your first dealer'.",
+        "error": "Standard error view."
+      },
+      "layout": "Card-based layout (single column) for each dealer. Show Shop Name, Contact Person, Area. Include two outline button actions per card: 'Call' and 'WhatsApp'. Avatar initials on the left."
+    }
+  ],
+  "images": {
+    "logo_soneja": {
+      "url": "https://images.unsplash.com/photo-1639110577642-962bd08a4424?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NTN8MHwxfHNlYXJjaHwxfHxsZXR0ZXIlMjBzJTIwbG9nbyUyMGJsdWUlMjBtaW5pbWFsaXN0fGVufDB8fHx8MTc4ODYwMTkxNnww&ixlib=rb-4.1.0&q=85",
+      "alt": "Soneja Electronics blue 'S' logo"
+    },
+    "dashboard_hero_bg": {
+      "url": "https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDJ8MHwxfHNlYXJjaHwxfHx0diUyMGhvbWUlMjBhcHBsaWFuY2VzJTIwd2FyZWhvdXNlJTIwbG9naXN0aWNzJTIwYmFja2dyb3VuZHxlbnwwfHx8fDE3ODg2MDE5MTJ8MA&ixlib=rb-4.1.0&q=85",
+      "alt": "Logistics warehouse background for dashboard hero"
+    },
+    "empty_clipboard": {
+      "url": "https://images.unsplash.com/photo-1651760680066-db9d32bd0357?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1MTN8MHwxfHNlYXJjaHwxfHxlbXB0eSUyMGJveCUyMGludmVudG9yeSUyMGNoZWNrbGlzdHxlbnwwfHx8fDE3ODUzODk0NDB8MA&ixlib=rb-4.1.0&q=85",
+      "alt": "Empty clipboard for zero orders or tasks"
+    },
+    "tv_product_placeholder": {
+      "url": "https://images.unsplash.com/photo-1646861039459-fd9e3aabf3fb?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Nzh8MHwxfHNlYXJjaHwxfHxzbWFydCUyMHR2JTIwZGlzcGxheSUyMHNjcmVlbiUyMHBuZ3xlbnwwfHx8fDE3ODg2MDE5MTZ8MA&ixlib=rb-4.1.0&q=85",
+      "alt": "Smart TV placeholder for inventory SKUs"
+    },
+    "empty_box": {
+      "url": "https://images.unsplash.com/photo-1573376670329-0261ea9fde97?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NTZ8MHwxfHNlYXJjaHwxfHxlbXB0eSUyMGJveCUyMGludmVudG9yeSUyMG1pbmltYWx8ZW58MHx8fHwxNzgyNDYxMjc3fDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Empty box illustration for zero inventory"
+    },
+    "user_avatar": {
+      "url": "https://images.unsplash.com/photo-1589386417686-0d34b5903d23?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2OTV8MHwxfHNlYXJjaHwxfHxpbmRpYW4lMjBidXNpbmVzc21hbiUyMHBvcnRyYWl0JTIwc21pbGV8ZW58MHx8fHwxNzg4NjAxOTIxfDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Indian businessman portrait for user avatar"
+    }
+  },
+  "haptics": {
+    "button_press": "light",
+    "tab_switch": "selection",
+    "success_action": "notification_success",
+    "error_action": "notification_error",
+    "filter_chip_toggle": "light"
+  },
+  "instructions_to_main_agent": [
+    "Strictly follow the 'iOS-Native Clean' personality layout guidelines: use native spacing rhythms and avoid heavy material card shadows.",
+    "Implement dense, highly scannable list structures (e.g., Sales Orders) with tabular numbers for INR values to ease reading for the business owner.",
+    "The app uses a teal/blue theme per the client's explicit request. Ensure the teal colors do not wash out; adhere to the defined `brand` and `surface` tokens.",
+    "Place chip rows for filtering (e.g., All/Pending/Cleared) inside a sticky header with `expo-glass-effect` or `expo-blur` when content scrolls underneath.",
+    "Any hero images or backgrounds (like the dashboard warehouse background) MUST use a top-to-bottom vertical gradient scrim so text stays readable.",
+    "Use Phosphor icons consistently. Stick to weight 400-500 max for all typography, using size rather than boldness for hierarchy.",
+    "Empty states must use the provided real images (clipboard, empty box) mapped with the correct text labels and a primary CTA."
+  ]
+}
