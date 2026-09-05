@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { Modal, Pressable, ScrollView, Text, View } from "react-native";
+import { Modal, Platform, Pressable, Text, View } from "react-native";
+import DateTimePicker from "@react-native-community/datetimepicker";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocalSearchParams, useRouter } from "expo-router";
 
-import { apiDelete, apiGet, apiPost } from "@/src/api/client";
+import { apiDelete, apiGet, apiPatch, apiPost } from "@/src/api/client";
 import { Badge, Button, Card, Field, Loading, ErrorState } from "@/src/components/ui";
 import { Icon } from "@/src/components/icon";
 import { ScreenHeader } from "@/src/components/header";
@@ -30,6 +31,10 @@ export function OrderDetail({ kind }: { kind: "sale" | "purchase" }) {
   const [payAmount, setPayAmount] = useState("");
   const [payNote, setPayNote] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editRef, setEditRef] = useState("");
+  const [editDate, setEditDate] = useState<Date>(new Date());
+  const [showPicker, setShowPicker] = useState(false);
 
   const { data: o, isLoading, isError, refetch } = useQuery({
     queryKey: [listKey, id],
@@ -66,6 +71,23 @@ export function OrderDetail({ kind }: { kind: "sale" | "purchase" }) {
     },
     onError: (e: any) => toast.show(e?.message || "Failed", "error"),
   });
+
+  const editMutation = useMutation({
+    mutationFn: () => apiPatch(`/orders/${id}`, { ref_no: editRef.trim() || null, date: editDate.toISOString() }),
+    onSuccess: () => {
+      invalidateAll();
+      refetch();
+      setEditOpen(false);
+      toast.show("Invoice details updated", "success");
+    },
+    onError: (e: any) => toast.show(e?.message || "Failed", "error"),
+  });
+
+  function openEdit() {
+    setEditRef(o?.ref_no || "");
+    setEditDate(o?.date ? new Date(o.date) : new Date());
+    setEditOpen(true);
+  }
 
   function addPayment() {
     const amt = parseFloat(payAmount) || 0;
@@ -104,6 +126,13 @@ export function OrderDetail({ kind }: { kind: "sale" | "purchase" }) {
             <Text style={s.meta}>
               {partyLabel} · {formatDate(o.date)}
             </Text>
+            <Pressable style={s.editRow} onPress={openEdit} testID="edit-invoice">
+              <Icon name="receipt-text-edit-outline" size={16} color={colors.brandPrimary} />
+              <Text style={s.editRowText}>
+                {o.ref_no ? `Invoice ${o.ref_no}` : "Add invoice number"} · {formatDate(o.date)}
+              </Text>
+              <Icon name="pencil" size={14} color={colors.muted} />
+            </Pressable>
             <View style={s.amountBox}>
               <View style={s.amountCol}>
                 <Text style={s.amountLabel}>Total</Text>
@@ -198,6 +227,41 @@ export function OrderDetail({ kind }: { kind: "sale" | "purchase" }) {
           </View>
         </View>
       </Modal>
+
+      {/* Edit invoice & date */}
+      <Modal visible={editOpen} animationType="slide" transparent onRequestClose={() => setEditOpen(false)}>
+        <View style={s.backdrop}>
+          <View style={[s.editSheet, { paddingBottom: insets.bottom + spacing.md }]}>
+            <View style={s.rowBetween}>
+              <Text style={s.editTitle}>Invoice & Date</Text>
+              <Pressable onPress={() => setEditOpen(false)} hitSlop={10} testID="edit-close">
+                <Icon name="close" size={24} color={colors.onSurface} />
+              </Pressable>
+            </View>
+            <Field label={isSale ? "Invoice Number" : "PO Number"} value={editRef} onChangeText={setEditRef} placeholder="e.g. INV-001" testID="edit-ref" />
+            <Text style={s.dateLabel}>Order Date</Text>
+            <Pressable style={s.dateBtn} onPress={() => setShowPicker(true)} testID="edit-date-btn">
+              <Icon name="calendar" size={18} color={colors.brandPrimary} />
+              <Text style={s.dateText}>{formatDate(editDate.toISOString())}</Text>
+            </Pressable>
+            {showPicker ? (
+              <DateTimePicker
+                value={editDate}
+                mode="date"
+                display={Platform.OS === "ios" ? "spinner" : "default"}
+                onChange={(_e, d) => {
+                  setShowPicker(Platform.OS === "ios");
+                  if (d) setEditDate(d);
+                }}
+                testID="edit-date-picker"
+              />
+            ) : null}
+            <View style={{ marginTop: spacing.md }}>
+              <Button title="Save" onPress={() => editMutation.mutate()} loading={editMutation.isPending} icon="check" testID="edit-save" />
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -206,6 +270,8 @@ const useStyles = makeStyles((colors) => ({
   rowBetween: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   party: { color: colors.onSurface, fontSize: 18, fontWeight: "800", flex: 1 },
   meta: { color: colors.muted, fontSize: 13 },
+  editRow: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: colors.brandTertiary, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 10, marginTop: 4 },
+  editRowText: { color: colors.onBrandTertiary, fontSize: 13, fontWeight: "700", flex: 1 },
   amountBox: { flexDirection: "row", backgroundColor: colors.surfaceTertiary, borderRadius: radius.md, padding: spacing.md, marginTop: spacing.sm },
   amountCol: { flex: 1, alignItems: "center", gap: 3 },
   amountLabel: { color: colors.muted, fontSize: 12, fontWeight: "600" },
@@ -222,4 +288,9 @@ const useStyles = makeStyles((colors) => ({
   confirmCard: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.xl, alignItems: "center", gap: 8, width: "100%", maxWidth: 360 },
   confirmTitle: { color: colors.onSurface, fontSize: 18, fontWeight: "800" },
   confirmSub: { color: colors.muted, fontSize: 14, textAlign: "center" },
+  editSheet: { backgroundColor: colors.surface, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, padding: spacing.lg, gap: spacing.md },
+  editTitle: { color: colors.onSurface, fontSize: 18, fontWeight: "800" },
+  dateLabel: { color: colors.onSurfaceSecondary, fontSize: 13, fontWeight: "600" },
+  dateBtn: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: colors.surfaceTertiary, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, paddingHorizontal: 14, paddingVertical: 13 },
+  dateText: { color: colors.onSurface, fontSize: 15, fontWeight: "600" },
 }));

@@ -122,6 +122,14 @@ class PaymentIn(BaseModel):
     note: Optional[str] = ""
 
 
+class OrderEdit(BaseModel):
+    ref_no: Optional[str] = None
+    date: Optional[str] = None
+    party_id: Optional[str] = None
+    party_name: Optional[str] = None
+    notes: Optional[str] = None
+
+
 class ExpenseIn(BaseModel):
     category: str
     amount: float = Field(gt=0)
@@ -387,6 +395,19 @@ async def add_payment(oid: str, body: PaymentIn, user=Depends(current_user)):
     pay = {"id": new_id(), "amount": round(body.amount, 2),
            "date": body.date or now_iso(), "note": body.note or ""}
     await db.orders.update_one({"id": oid}, {"$push": {"payments": pay}})
+    o = await db.orders.find_one({"id": oid})
+    return serialize_order(o)
+
+
+@api_router.patch("/orders/{oid}")
+async def edit_order(oid: str, body: OrderEdit, user=Depends(current_user)):
+    o = await db.orders.find_one({"id": oid, "deleted_at": None})
+    if not o:
+        raise HTTPException(404, "Order not found")
+    changes = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
+    if not changes:
+        raise HTTPException(400, "No changes")
+    await db.orders.update_one({"id": oid}, {"$set": changes})
     o = await db.orders.find_one({"id": oid})
     return serialize_order(o)
 
