@@ -1,13 +1,14 @@
 import { useState } from "react";
 import { FlatList, Modal, Pressable, Text, View } from "react-native";
-import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
+import { KeyboardAwareScrollView } from "@/src/components/keyboard-scroll";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { apiGet, apiPost, apiDelete } from "@/src/api/client";
+import { apiGet, apiPost, apiPut, apiDelete } from "@/src/api/client";
 import { Button, Card, ErrorState, Field, Loading, EmptyState } from "@/src/components/ui";
 import { Icon, IconName } from "@/src/components/icon";
 import { ScreenHeader } from "@/src/components/header";
+import { DateField } from "@/src/components/date-field";
 import { useToast } from "@/src/components/toast";
 import { formatINR, formatDate } from "@/src/lib/format";
 import { makeStyles, radius, spacing, useTheme } from "@/src/theme";
@@ -33,9 +34,11 @@ export default function Expenses() {
   const insets = useSafeAreaInsets();
 
   const [open, setOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [category, setCategory] = useState("Transport");
   const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
+  const [expDate, setExpDate] = useState<Date>(new Date());
 
   const { data, isLoading, isError, refetch, isRefetching } = useQuery({
     queryKey: ["expenses"],
@@ -44,16 +47,35 @@ export default function Expenses() {
 
   const total = data?.reduce((a, e) => a + (e.amount || 0), 0) || 0;
 
+  function openNew() {
+    setEditingId(null);
+    setCategory("Transport");
+    setAmount("");
+    setNote("");
+    setExpDate(new Date());
+    setOpen(true);
+  }
+
+  function openEdit(e: any) {
+    setEditingId(e.id);
+    setCategory(e.category);
+    setAmount(String(e.amount));
+    setNote(e.note || "");
+    setExpDate(e.date ? new Date(e.date) : new Date());
+    setOpen(true);
+  }
+
   const saveMutation = useMutation({
-    mutationFn: () => apiPost("/expenses", { category, amount: parseFloat(amount) || 0, note: note.trim() }),
+    mutationFn: () => {
+      const body = { category, amount: parseFloat(amount) || 0, note: note.trim(), date: expDate.toISOString() };
+      return editingId ? apiPut(`/expenses/${editingId}`, body) : apiPost("/expenses", body);
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["expenses"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
       qc.invalidateQueries({ queryKey: ["reports"] });
       setOpen(false);
-      setAmount("");
-      setNote("");
-      toast.show("Expense added", "success");
+      toast.show(editingId ? "Expense updated" : "Expense added", "success");
     },
     onError: (e: any) => toast.show(e?.message || "Failed", "error"),
   });
@@ -75,7 +97,7 @@ export default function Expenses() {
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.surfaceSecondary }}>
-      <ScreenHeader title="Daily Expenses" subtitle="Track your spending" showBack rightIcon="plus-circle" onRightPress={() => setOpen(true)} rightTestID="expense-add" />
+      <ScreenHeader title="Daily Expenses" subtitle="Track your spending" showBack rightIcon="plus-circle" onRightPress={openNew} rightTestID="expense-add" />
 
       {isLoading ? (
         <Loading testID="expenses-loading" />
@@ -96,9 +118,9 @@ export default function Expenses() {
               <Text style={s.totalValue}>{formatINR(total)}</Text>
             </Card>
           }
-          ListEmptyComponent={<EmptyState title="No expenses yet" subtitle="Log your first expense." actionLabel="Add Expense" onAction={() => setOpen(true)} testID="expenses-empty" />}
+          ListEmptyComponent={<EmptyState title="No expenses yet" subtitle="Log your first expense." actionLabel="Add Expense" onAction={openNew} testID="expenses-empty" />}
           renderItem={({ item }) => (
-            <View style={s.row} testID={`expense-${item.id}`}>
+            <Pressable style={s.row} onPress={() => openEdit(item)} testID={`expense-${item.id}`}>
               <View style={s.icon}>
                 <Icon name={catIcon(item.category)} size={20} color={colors.brandPrimary} />
               </View>
@@ -113,7 +135,7 @@ export default function Expenses() {
               <Pressable onPress={() => deleteMutation.mutate(item.id)} hitSlop={8} style={{ marginLeft: spacing.sm }} testID={`expense-delete-${item.id}`}>
                 <Icon name="trash-can-outline" size={18} color={colors.error} />
               </Pressable>
-            </View>
+            </Pressable>
           )}
         />
       )}
@@ -122,7 +144,7 @@ export default function Expenses() {
         <View style={s.backdrop}>
           <View style={[s.sheet, { paddingBottom: insets.bottom + spacing.md }]}>
             <View style={s.sheetHeader}>
-              <Text style={s.sheetTitle}>Add Expense</Text>
+              <Text style={s.sheetTitle}>{editingId ? "Edit Expense" : "Add Expense"}</Text>
               <Pressable onPress={() => setOpen(false)} hitSlop={10} testID="expense-form-close">
                 <Icon name="close" size={24} color={colors.onSurface} />
               </Pressable>
@@ -146,8 +168,9 @@ export default function Expenses() {
                 })}
               </View>
               <Field label="Amount (₹)" value={amount} onChangeText={(v) => setAmount(v.replace(/[^0-9.]/g, ""))} keyboardType="numeric" placeholder="0" testID="ef-amount" />
+              <DateField label="Date" value={expDate} onChange={setExpDate} testID="ef-date" />
               <Field label="Note (optional)" value={note} onChangeText={setNote} placeholder="What was this for?" testID="ef-note" />
-              <Button title="Add Expense" onPress={save} loading={saveMutation.isPending} icon="check" testID="ef-save" />
+              <Button title={editingId ? "Save Changes" : "Add Expense"} onPress={save} loading={saveMutation.isPending} icon="check" testID="ef-save" />
             </KeyboardAwareScrollView>
           </View>
         </View>

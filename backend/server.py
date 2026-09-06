@@ -343,6 +343,34 @@ async def _create_order(kind: str, body: OrderIn):
     return serialize_order(doc)
 
 
+async def _update_order(oid: str, body: OrderIn):
+    if not body.items:
+        raise HTTPException(400, "Order must have at least one item")
+    existing = await db.orders.find_one({"id": oid, "deleted_at": None})
+    if not existing:
+        raise HTTPException(404, "Order not found")
+    kind = existing["kind"]
+    sign = 1 if kind == "purchase" else -1
+    # reverse the inventory effect of the old items, then apply the new items
+    await _adjust_inventory(existing.get("items", []), -sign)
+    items = []
+    total = 0.0
+    for li in body.items:
+        prod = await db.products.find_one({"id": li.product_id, "deleted_at": None})
+        cost = float(prod.get("cost_price", 0)) if prod else 0.0
+        amount = round(li.qty * li.rate, 2)
+        total += amount
+        items.append({"product_id": li.product_id, "model": li.model, "qty": li.qty,
+                      "rate": li.rate, "cost": cost, "amount": amount})
+    await _adjust_inventory(items, sign)
+    changes = {"party_id": body.party_id, "party_name": body.party_name,
+               "ref_no": body.ref_no, "date": body.date or existing.get("date"),
+               "notes": body.notes or "", "items": items, "total": round(total, 2)}
+    await db.orders.update_one({"id": oid}, {"$set": changes})
+    o = await db.orders.find_one({"id": oid})
+    return serialize_order(o)
+
+
 async def _list_orders(kind: str):
     rows = await db.orders.find({"kind": kind, "deleted_at": None}).sort("date", -1).to_list(2000)
     return [serialize_order(r) for r in rows]
@@ -412,6 +440,11 @@ async def edit_order(oid: str, body: OrderEdit, user=Depends(current_user)):
     return serialize_order(o)
 
 
+@api_router.put("/orders/{oid}")
+async def update_order(oid: str, body: OrderIn, user=Depends(current_user)):
+    return await _update_order(oid, body)
+
+
 @api_router.delete("/orders/{oid}")
 async def delete_order(oid: str, user=Depends(current_user)):
     o = await db.orders.find_one({"id": oid, "deleted_at": None})
@@ -440,6 +473,17 @@ async def create_expense(body: ExpenseIn, user=Depends(current_user)):
     doc["created_at"] = now_iso()
     await db.expenses.insert_one(doc)
     return clean(doc)
+
+
+@api_router.put("/expenses/{eid}")
+async def update_expense(eid: str, body: ExpenseIn, user=Depends(current_user)):
+    changes = body.model_dump()
+    changes["date"] = changes.get("date") or now_iso()
+    r = await db.expenses.find_one_and_update({"id": eid, "deleted_at": None},
+                                              {"$set": changes}, return_document=True)
+    if not r:
+        raise HTTPException(404, "Expense not found")
+    return clean(r)
 
 
 @api_router.delete("/expenses/{eid}")

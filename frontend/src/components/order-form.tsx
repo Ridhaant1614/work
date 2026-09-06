@@ -1,15 +1,16 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Pressable, Text, View } from "react-native";
-import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
+import { KeyboardAwareScrollView } from "@/src/components/keyboard-scroll";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 
-import { apiGet, apiPost } from "@/src/api/client";
+import { apiGet, apiPost, apiPut } from "@/src/api/client";
 import { Button, Card, Field } from "@/src/components/ui";
 import { Icon } from "@/src/components/icon";
 import { ScreenHeader } from "@/src/components/header";
 import { SelectField, Option } from "@/src/components/picker";
+import { DateField } from "@/src/components/date-field";
 import { useToast } from "@/src/components/toast";
 import { formatINR } from "@/src/lib/format";
 import { makeStyles, radius, spacing, useTheme } from "@/src/theme";
@@ -25,15 +26,43 @@ export function OrderForm({ kind }: { kind: "sale" | "purchase" }) {
   const insets = useSafeAreaInsets();
 
   const isSale = kind === "sale";
+  const { id: editId } = useLocalSearchParams<{ id?: string }>();
+  const isEdit = !!editId;
+
   const { data: products } = useQuery({ queryKey: ["products"], queryFn: () => apiGet<any[]>("/products") });
   const { data: dealers } = useQuery({ queryKey: ["dealers"], queryFn: () => apiGet<any[]>("/dealers"), enabled: isSale });
+  const { data: existing } = useQuery({
+    queryKey: [isSale ? "sales" : "purchases", editId],
+    queryFn: () => apiGet(`${isSale ? "/sales" : "/purchases"}/${editId}`),
+    enabled: isEdit,
+  });
 
   const [partyId, setPartyId] = useState<string | null>(null);
   const [partyName, setPartyName] = useState("");
   const [refNo, setRefNo] = useState("");
   const [notes, setNotes] = useState("");
+  const [orderDate, setOrderDate] = useState<Date>(new Date());
   const [initialPayment, setInitialPayment] = useState("");
   const [lines, setLines] = useState<Line[]>([]);
+
+  useEffect(() => {
+    if (existing) {
+      setPartyId(existing.party_id ?? null);
+      setPartyName(existing.party_name ?? "");
+      setRefNo(existing.ref_no ?? "");
+      setNotes(existing.notes ?? "");
+      setOrderDate(existing.date ? new Date(existing.date) : new Date());
+      setLines(
+        (existing.items || []).map((it: any, i: number) => ({
+          key: `${it.product_id}-${i}`,
+          product_id: it.product_id,
+          model: it.model,
+          qty: String(it.qty),
+          rate: String(it.rate),
+        })),
+      );
+    }
+  }, [existing]);
 
   const productOptions: Option[] =
     products?.map((p) => ({ label: p.model, value: p.id, sublabel: `Stock: ${p.qty_on_hand} · Cost ${formatINR(p.cost_price)}` })) || [];
@@ -69,17 +98,21 @@ export function OrderForm({ kind }: { kind: "sale" | "purchase" }) {
         party_name: isSale ? partyName : partyName.trim(),
         ref_no: refNo.trim() || null,
         notes: notes.trim(),
+        date: orderDate.toISOString(),
         items: lines.map((l) => ({ product_id: l.product_id, model: l.model, qty: parseFloat(l.qty) || 0, rate: parseFloat(l.rate) || 0 })),
-        initial_payment: parseFloat(initialPayment) || 0,
+        initial_payment: isEdit ? 0 : parseFloat(initialPayment) || 0,
       };
-      return apiPost(isSale ? "/sales" : "/purchases", body);
+      return isEdit
+        ? apiPut(`/orders/${editId}`, body)
+        : apiPost(isSale ? "/sales" : "/purchases", body);
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: [isSale ? "sales" : "purchases"] });
+      if (isEdit) qc.invalidateQueries({ queryKey: [isSale ? "sales" : "purchases", editId] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
       qc.invalidateQueries({ queryKey: ["products"] });
       qc.invalidateQueries({ queryKey: ["reports"] });
-      toast.show(isSale ? "Sale order created" : "Purchase order created", "success");
+      toast.show(isEdit ? "Order updated" : isSale ? "Sale order created" : "Purchase order created", "success");
       if (router.canGoBack()) router.back();
       else router.replace((isSale ? "/sales" : "/purchases") as any);
     },
@@ -96,7 +129,7 @@ export function OrderForm({ kind }: { kind: "sale" | "purchase" }) {
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.surfaceSecondary }}>
-      <ScreenHeader title={isSale ? "New Sale Order" : "New Purchase Order"} subtitle={isSale ? "Invoice to a dealer" : "Order from supplier"} showBack />
+      <ScreenHeader title={isEdit ? (isSale ? "Edit Sale Order" : "Edit Purchase Order") : isSale ? "New Sale Order" : "New Purchase Order"} subtitle={isSale ? "Invoice to a dealer" : "Order from supplier"} showBack />
       <KeyboardAwareScrollView
         contentContainerStyle={{ padding: spacing.lg, gap: spacing.lg, paddingBottom: insets.bottom + spacing["3xl"] }}
         bottomOffset={24}
@@ -119,6 +152,7 @@ export function OrderForm({ kind }: { kind: "sale" | "purchase" }) {
             <Field label="Supplier" value={partyName} onChangeText={setPartyName} placeholder="Supplier name" testID="input-supplier" />
           )}
           <Field label={isSale ? "Invoice No. (optional)" : "PO No. (optional)"} value={refNo} onChangeText={setRefNo} placeholder="e.g. INV-001" testID="input-refno" />
+          <DateField label="Order Date" value={orderDate} onChange={setOrderDate} testID="order-date" />
         </Card>
 
         <View>
@@ -162,14 +196,16 @@ export function OrderForm({ kind }: { kind: "sale" | "purchase" }) {
         </View>
 
         <Card style={{ gap: spacing.md }}>
-          <Field
-            label={isSale ? "Payment received now (optional)" : "Payment made now (optional)"}
-            value={initialPayment}
-            onChangeText={(v) => setInitialPayment(v.replace(/[^0-9.]/g, ""))}
-            keyboardType="numeric"
-            placeholder="0"
-            testID="input-initial-payment"
-          />
+          {!isEdit ? (
+            <Field
+              label={isSale ? "Payment received now (optional)" : "Payment made now (optional)"}
+              value={initialPayment}
+              onChangeText={(v) => setInitialPayment(v.replace(/[^0-9.]/g, ""))}
+              keyboardType="numeric"
+              placeholder="0"
+              testID="input-initial-payment"
+            />
+          ) : null}
           <Field label="Notes (optional)" value={notes} onChangeText={setNotes} placeholder="Any remarks" multiline testID="input-notes" />
         </Card>
 
@@ -180,7 +216,7 @@ export function OrderForm({ kind }: { kind: "sale" | "purchase" }) {
           </Text>
         </View>
 
-        <Button title={isSale ? "Create Sale Order" : "Create Purchase Order"} onPress={submit} loading={mutation.isPending} icon="check" testID="submit-order" />
+        <Button title={isEdit ? "Save Changes" : isSale ? "Create Sale Order" : "Create Purchase Order"} onPress={submit} loading={mutation.isPending} icon="check" testID="submit-order" />
       </KeyboardAwareScrollView>
     </View>
   );

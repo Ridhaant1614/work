@@ -43,3 +43,6 @@ Build a CRM for Soneja Electronics, a distributor of home appliances (Worldtech 
 
 ## Next Tasks
 - Gather feedback on dashboard KPIs and reports; consider date filters on reports.
+
+## Fixes Log
+- 2026-06: APK force-closed right after splash (worked in web preview). Root cause: `react-native-keyboard-controller` — a native module mounted at the app root (`KeyboardProvider`) and used on the login screen — initializes only in standalone builds, not in the web preview. Replaced it app-wide with a core React Native `KeyboardAvoidingView` + `ScrollView` drop-in (`src/components/keyboard-scroll.tsx`); removed `KeyboardProvider` from `_layout.tsx`. Also fixed expo/expo-router patch version drift flagged by expo-doctor. Requires regenerating the Android build.
