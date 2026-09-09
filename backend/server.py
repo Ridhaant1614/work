@@ -16,11 +16,11 @@ from passlib.context import CryptContext
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-mongo_url = os.environ['MONGO_URL']
+mongo_url = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
 client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+db = client[os.environ.get('DB_NAME', 'soneja_crm')]
 
-JWT_SECRET = os.environ['JWT_SECRET']
+JWT_SECRET = os.environ.get('JWT_SECRET', 'soneja-crm-distribution-secret-key-2026')
 JWT_ALGORITHM = os.environ.get('JWT_ALGORITHM', 'HS256')
 TOKEN_MINUTES = int(os.environ.get('ACCESS_TOKEN_MINUTES', '43200'))
 

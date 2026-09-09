@@ -80,9 +80,15 @@ memory/test_credentials.md
 
 # Mobile development
 android-sdk/
+# Environment files
 .env
 .env.*
 *.env
+!.env.example
 credentials.json
 *.key
 .credentials
+
+# Local containers & tools
+mongo_data/
+.emergent/
