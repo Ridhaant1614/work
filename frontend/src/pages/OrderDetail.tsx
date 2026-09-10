@@ -5,6 +5,7 @@ import { apiGet, apiPost, apiDelete } from "../api";
 import { Spinner, PayBadge, ConfirmModal } from "../ui";
 import { formatINR, formatDate } from "../format";
 import { useToast } from "../toast";
+import { type BillData, generateWhatsAppBillText, sendWhatsAppBill, printThermalReceipt } from "../receipt";
 
 type Kind = "sale" | "purchase";
 
@@ -112,6 +113,38 @@ ${o.notes ? `<hr class="divider"><div style="font-size:13px;color:#6B7280;font-s
     if (w) { w.document.write(html); w.document.close(); }
   }
 
+  function toBillData(): BillData | null {
+    if (!o) return null;
+    return {
+      refNo: o.ref_no || o.id,
+      date: o.date,
+      customerName: o.party_name,
+      items: (o.items || []).map((it: any) => ({
+        model: it.model,
+        qty: Number(it.qty) || 0,
+        rate: Number(it.rate) || 0,
+        amount: Number(it.amount) || (Number(it.qty) * Number(it.rate)),
+      })),
+      total: Number(o.total) || 0,
+      paid: Number(o.amount_paid ?? o.paid ?? 0),
+      balance: Number(o.balance ?? 0),
+      notes: o.notes,
+    };
+  }
+
+  function handleThermal() {
+    const bill = toBillData();
+    if (bill) printThermalReceipt(bill);
+  }
+
+  function handleWhatsApp() {
+    const bill = toBillData();
+    if (bill) {
+      const text = generateWhatsAppBillText(bill);
+      sendWhatsAppBill(null, text);
+    }
+  }
+
   if (isLoading) return <div className="page-body"><Spinner /></div>;
   if (isError || !o) return <div className="page-body"><div className="empty-state"><div className="empty-icon">⚠️</div><h3>Order not found</h3><button className="btn btn-outline btn-sm" onClick={() => navigate(-1)}>← Back</button></div></div>;
 
@@ -123,8 +156,14 @@ ${o.notes ? `<hr class="divider"><div style="font-size:13px;color:#6B7280;font-s
           <p>{o.ref_no ? `Ref: ${o.ref_no} · ` : ""}{o.party_name}</p>
         </div>
         <div className="page-header-actions">
+          {isSale && (
+            <>
+              <button className="btn btn-outline btn-sm" style={{ color: "#10b981", borderColor: "#10b981", fontWeight: 700 }} onClick={handleWhatsApp} title="Send via WhatsApp">📲 WhatsApp</button>
+              <button className="btn btn-outline btn-sm" onClick={handleThermal} title="80mm Thermal Receipt">🧾 Thermal</button>
+            </>
+          )}
           <button className="btn btn-ghost btn-sm" onClick={printInvoice} title="Print / PDF">🖨 Print</button>
-          <button className="btn btn-outline btn-sm" onClick={() => navigate(`${isSale ? "/sales" : "/purchases"}/new?id=${id}`)}>✏️ Edit</button>
+          <button className="btn btn-outline btn-sm" onClick={() => navigate(`${isSale ? "/sales" : "/purchases"}/${id}/edit`)}>✏️ Edit</button>
           <button className="btn btn-ghost btn-sm" style={{ color: "var(--error)" }} onClick={() => setConfirmDelete(true)}>🗑 Delete</button>
           <button className="btn btn-outline btn-sm" onClick={() => navigate(-1)}>← Back</button>
         </div>
@@ -139,7 +178,12 @@ ${o.notes ? `<hr class="divider"><div style="font-size:13px;color:#6B7280;font-s
               <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 2 }}>{isSale ? "Dealer" : "Supplier"} · {formatDate(o.date)}</div>
               {o.ref_no && <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 2 }}>Ref: {o.ref_no}</div>}
             </div>
-            <PayBadge status={o.pay_status} />
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "4px" }}>
+              <PayBadge status={o.pay_status} />
+              {o.date && new Date(o.date).getTime() < Date.now() - 86400000 * 2 && (
+                <span className="badge" style={{ background: "var(--surface-2)", color: "var(--muted)", fontSize: 11 }}>📅 Backdated</span>
+              )}
+            </div>
           </div>
           {o.balance > 0 && o.age_days > 0 && (
             <div style={{ fontSize: 13, color: "var(--warning)", fontWeight: 700 }}>⏱ Outstanding since {o.age_days} day{o.age_days === 1 ? "" : "s"}</div>

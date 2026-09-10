@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiPost, apiPut } from "../api";
 import { Spinner } from "../ui";
@@ -11,8 +11,11 @@ type Kind = "sale" | "purchase";
 
 export default function OrderForm({ kind }: { kind: Kind }) {
   const navigate = useNavigate();
-  const { id: editId } = useParams<{ id?: string }>();
-  const isEdit = !!editId && editId !== "new";
+  const { id: paramId } = useParams<{ id?: string }>();
+  const [searchParams] = useSearchParams();
+  const queryId = searchParams.get("id");
+  const editId = (paramId && paramId !== "new") ? paramId : (queryId && queryId !== "new" ? queryId : undefined);
+  const isEdit = !!editId;
   const { show } = useToast();
   const qc = useQueryClient();
   const isSale = kind === "sale";
@@ -41,11 +44,11 @@ export default function OrderForm({ kind }: { kind: Kind }) {
       setNotes(existing.notes ?? "");
       setOrderDate(toInputDate(existing.date));
       setLines((existing.items || []).map((it: any, i: number) => ({
-        key: `${it.product_id}-${i}`,
+        key: `${it.product_id || "p"}-${i}-${Date.now()}`,
         product_id: it.product_id,
         model: it.model,
-        qty: String(it.qty),
-        rate: String(it.rate),
+        qty: String(it.qty ?? 1),
+        rate: String(it.rate ?? 0),
       })));
     }
   }, [existing]);
@@ -54,12 +57,15 @@ export default function OrderForm({ kind }: { kind: Kind }) {
 
   const mutation = useMutation({
     mutationFn: () => {
+      const isoDate = orderDate
+        ? (orderDate.includes("T") ? orderDate : `${orderDate}T12:00:00.000Z`)
+        : new Date().toISOString();
       const body = {
         party_id: isSale ? partyId : null,
         party_name: isSale ? partyName : partyName.trim(),
         ref_no: refNo.trim() || null,
         notes: notes.trim(),
-        date: new Date(orderDate).toISOString(),
+        date: isoDate,
         items: lines.map(l => ({ product_id: l.product_id, model: l.model, qty: parseFloat(l.qty) || 0, rate: parseFloat(l.rate) || 0 })),
         initial_payment: isEdit ? 0 : parseFloat(initialPayment) || 0,
       };
@@ -67,13 +73,14 @@ export default function OrderForm({ kind }: { kind: Kind }) {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: [isSale ? "sales" : "purchases"] });
+      if (isEdit) qc.invalidateQueries({ queryKey: [isSale ? "sales" : "purchases", editId] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
       qc.invalidateQueries({ queryKey: ["products"] });
       qc.invalidateQueries({ queryKey: ["reports"] });
-      show(isEdit ? "Order updated" : isSale ? "Sale order created" : "Purchase order created", "success");
-      navigate(isSale ? "/sales" : "/purchases");
+      show(isEdit ? "Order updated successfully" : isSale ? "Sale order created successfully" : "Purchase order created successfully", "success");
+      navigate(isEdit ? `${isSale ? "/sales" : "/purchases"}/${editId}` : (isSale ? "/sales" : "/purchases"));
     },
-    onError: (e: any) => show(e?.message || "Failed to save", "error"),
+    onError: (e: any) => show(e?.message || "Failed to save order", "error"),
   });
 
   function addLine(productId: string) {
@@ -102,7 +109,7 @@ export default function OrderForm({ kind }: { kind: Kind }) {
       <div className="page-header">
         <div>
           <h1>{isEdit ? (isSale ? "Edit Sale Order" : "Edit Purchase Order") : isSale ? "New Sale Order" : "New Purchase Order"}</h1>
-          <p>{isSale ? "Invoice to a dealer" : "Order from supplier"}</p>
+          <p>{isEdit ? (isSale ? `Editing Sale Invoice ${refNo || ""}` : `Editing Purchase Order ${refNo || ""}`) : isSale ? "Invoice to a dealer" : "Order from supplier"}</p>
         </div>
         <div className="page-header-actions">
           <button className="btn btn-outline btn-sm" onClick={() => navigate(-1)}>← Back</button>
@@ -188,7 +195,11 @@ export default function OrderForm({ kind }: { kind: Kind }) {
 
         {/* Payment + Total */}
         <div className="card" style={{ display: "flex", flexDirection: "column", gap: "var(--s4)" }}>
-          {!isEdit && (
+          {isEdit ? (
+            <div style={{ background: "var(--surface-2)", padding: "var(--s3) var(--s4)", borderRadius: "var(--r-sm)", fontSize: 13, color: "var(--muted)" }}>
+              💳 <strong>{existing?.payments?.length || 0} recorded payment(s)</strong> totaling <strong>{formatINR(existing?.amount_paid ?? existing?.paid ?? 0)}</strong> will be preserved.
+            </div>
+          ) : (
             <div className="field">
               <label>{isSale ? "Payment received now (optional)" : "Payment made now (optional)"}</label>
               <input className="input" type="number" min={0} value={initialPayment} onChange={e => setInitialPayment(e.target.value)} placeholder="0" />

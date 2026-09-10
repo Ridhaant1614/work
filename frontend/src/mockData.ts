@@ -120,26 +120,219 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
     return { id: "u_owner", email: "owner@soneja.com", name: "Soneja Owner", role: "owner", active: true };
   }
 
+  // Helper: serialize order with financial status
+  function serializeOrder(o: any) {
+    const payments = o.payments || [];
+    const paid = Math.round(payments.reduce((s: number, pm: any) => s + (Number(pm.amount) || 0), 0) * 100) / 100;
+    const total = Math.round((Number(o.total) || 0) * 100) / 100;
+    const balance = Math.max(0, Math.round((total - paid) * 100) / 100);
+    const pay_status = balance <= 0.5 ? "cleared" : paid > 0 ? "partial" : "unpaid";
+    const dateStr = o.date || new Date().toISOString();
+    let age_days = 0;
+    try {
+      const dt = new Date(dateStr);
+      age_days = Math.max(0, Math.floor((Date.now() - dt.getTime()) / 86400000));
+    } catch {}
+    return {
+      ...o,
+      total,
+      paid,
+      amount_paid: paid,
+      balance,
+      pay_status,
+      age_days: balance > 0.5 ? age_days : 0,
+    };
+  }
+
+  // Helper: create order in store
+  function createOrderInStore(kind: "sale" | "purchase", ordBody: any) {
+    const orders = getStored<any[]>("orders", SEED_ORDERS);
+    const products = getStored<any[]>("products", SEED_PRODUCTS);
+
+    const items = (ordBody.items || []).map((it: any) => {
+      const prod = products.find((pr) => pr.id === it.product_id || pr.model === it.model);
+      const cost = prod ? Number(prod.cost_price) || 0 : Number(it.cost) || 0;
+      const qty = Number(it.qty) || 0;
+      const rate = Number(it.rate) || 0;
+      return {
+        product_id: it.product_id || (prod ? prod.id : "p_" + Date.now()),
+        model: it.model || (prod ? prod.model : "Item"),
+        qty,
+        rate,
+        cost,
+        amount: Math.round(qty * rate * 100) / 100,
+      };
+    });
+
+    const total = Math.round(items.reduce((s: number, it: any) => s + it.amount, 0) * 100) / 100;
+    const payments = [];
+    const initPay = Number(ordBody.initial_payment);
+    if (initPay > 0) {
+      payments.push({
+        id: "pm_" + Date.now(),
+        amount: initPay,
+        date: ordBody.date || new Date().toISOString(),
+        note: "Initial payment",
+      });
+    }
+
+    const refPrefix = kind === "sale" ? "INV-" : "PO-";
+    const newOrder = {
+      ...ordBody,
+      id: (kind === "sale" ? "so_" : "po_") + Date.now(),
+      kind,
+      party_id: kind === "sale" ? (ordBody.party_id || null) : null,
+      party_name: ordBody.party_name || (kind === "sale" ? "Dealer" : "Supplier"),
+      ref_no: ordBody.ref_no || `${refPrefix}${Math.floor(1000 + Math.random() * 9000)}`,
+      date: ordBody.date || new Date().toISOString(),
+      notes: ordBody.notes || "",
+      items,
+      total,
+      payments,
+      created_at: new Date().toISOString(),
+    };
+
+    orders.unshift(newOrder);
+    setStored("orders", orders);
+
+    // Adjust product inventory
+    const multiplier = kind === "purchase" ? 1 : -1;
+    items.forEach((it: any) => {
+      const prod = products.find((pr) => pr.id === it.product_id || pr.model === it.model);
+      if (prod) {
+        prod.qty_on_hand = Math.max(0, (Number(prod.qty_on_hand) || 0) + multiplier * it.qty);
+      }
+    });
+    setStored("products", products);
+
+    return serializeOrder(newOrder);
+  }
+
+  // Helper: update existing order in store
+  function updateOrderInStore(oid: string, ordBody: any) {
+    const orders = getStored<any[]>("orders", SEED_ORDERS);
+    const idx = orders.findIndex((item) => item.id === oid);
+    if (idx === -1) throw new Error("Order not found: " + oid);
+
+    const existing = orders[idx];
+    const kind = existing.kind || (ordBody.party_id ? "sale" : "purchase");
+    const products = getStored<any[]>("products", SEED_PRODUCTS);
+
+    // 1. Reverse the inventory effect of the old items
+    const prevMultiplier = kind === "purchase" ? -1 : 1;
+    (existing.items || []).forEach((it: any) => {
+      const prod = products.find((pr) => pr.id === it.product_id || pr.model === it.model);
+      if (prod) {
+        prod.qty_on_hand = Math.max(0, (Number(prod.qty_on_hand) || 0) + prevMultiplier * (Number(it.qty) || 0));
+      }
+    });
+
+    // 2. Parse new line items
+    const newItems = (ordBody.items || []).map((it: any) => {
+      const prod = products.find((pr) => pr.id === it.product_id || pr.model === it.model);
+      const cost = prod ? Number(prod.cost_price) || 0 : Number(it.cost) || 0;
+      const qty = Number(it.qty) || 0;
+      const rate = Number(it.rate) || 0;
+      return {
+        product_id: it.product_id || (prod ? prod.id : "p_" + Date.now()),
+        model: it.model || (prod ? prod.model : "Item"),
+        qty,
+        rate,
+        cost,
+        amount: Math.round(qty * rate * 100) / 100,
+      };
+    });
+
+    const total = Math.round(newItems.reduce((s: number, it: any) => s + it.amount, 0) * 100) / 100;
+
+    // 3. Apply the new inventory effect
+    const newMultiplier = kind === "purchase" ? 1 : -1;
+    newItems.forEach((it: any) => {
+      const prod = products.find((pr) => pr.id === it.product_id || pr.model === it.model);
+      if (prod) {
+        prod.qty_on_hand = Math.max(0, (Number(prod.qty_on_hand) || 0) + newMultiplier * it.qty);
+      }
+    });
+    setStored("products", products);
+
+    // 4. Update order, preserving payments and id
+    const updated = {
+      ...existing,
+      party_id: ordBody.party_id !== undefined ? ordBody.party_id : existing.party_id,
+      party_name: ordBody.party_name !== undefined ? ordBody.party_name : existing.party_name,
+      ref_no: ordBody.ref_no !== undefined ? ordBody.ref_no : existing.ref_no,
+      date: ordBody.date || existing.date,
+      notes: ordBody.notes !== undefined ? ordBody.notes : existing.notes,
+      items: newItems,
+      total,
+      updated_at: new Date().toISOString(),
+    };
+
+    orders[idx] = updated;
+    setStored("orders", orders);
+
+    return serializeOrder(updated);
+  }
+
   // Products
   if (p === "/products") {
-    const products = getStored("products", SEED_PRODUCTS);
+    const products = getStored<any[]>("products", SEED_PRODUCTS);
     if (method === "GET") return products;
     if (method === "POST") {
-      const np = { ...body, id: "p_" + Date.now(), qty_on_hand: Number(body.qty_on_hand) || 0 };
+      const np = {
+        ...body,
+        id: "p_" + Date.now(),
+        sku: body.sku || (body.model ? body.model.toUpperCase().replace(/\s+/g, "-").slice(0, 24) : `SKU-${Date.now()}`),
+        category: body.category || "Television",
+        cost_price: Number(body.cost_price) || 0,
+        sell_price: Number(body.sell_price) || 0,
+        qty_on_hand: Number(body.qty_on_hand) || 0,
+      };
       products.unshift(np);
       setStored("products", products);
       return np;
     }
   }
 
+  // Adjust stock endpoint: /products/:pid/adjust-stock
+  const adjustStockMatch = p.match(/^\/products\/([^/]+)\/adjust-stock$/);
+  if (adjustStockMatch && method === "POST") {
+    const pid = adjustStockMatch[1];
+    const products = getStored<any[]>("products", SEED_PRODUCTS);
+    const prod = products.find((pr) => pr.id === pid);
+    if (!prod) throw new Error("Product not found: " + pid);
+
+    if (body.new_qty !== undefined && body.new_qty !== null && body.new_qty !== "") {
+      prod.qty_on_hand = Math.max(0, Number(body.new_qty) || 0);
+    } else if (body.qty_delta !== undefined && body.qty_delta !== null) {
+      prod.qty_on_hand = Math.max(0, (Number(prod.qty_on_hand) || 0) + (Number(body.qty_delta) || 0));
+    }
+    setStored("products", products);
+    return prod;
+  }
+
   const pMatch = p.match(/^\/products\/([^/]+)$/);
   if (pMatch) {
     const pid = pMatch[1];
-    let products = getStored("products", SEED_PRODUCTS);
+    let products = getStored<any[]>("products", SEED_PRODUCTS);
     if (method === "PUT") {
-      products = products.map((item) => (item.id === pid ? { ...item, ...body } : item));
+      let updatedProd = null;
+      products = products.map((item) => {
+        if (item.id === pid) {
+          updatedProd = {
+            ...item,
+            ...body,
+            id: pid,
+            cost_price: body.cost_price !== undefined ? Number(body.cost_price) : item.cost_price,
+            sell_price: body.sell_price !== undefined ? Number(body.sell_price) : item.sell_price,
+            qty_on_hand: body.qty_on_hand !== undefined ? Number(body.qty_on_hand) : item.qty_on_hand,
+          };
+          return updatedProd;
+        }
+        return item;
+      });
       setStored("products", products);
-      return body;
+      return updatedProd || body;
     }
     if (method === "DELETE") {
       products = products.filter((item) => item.id !== pid);
@@ -165,7 +358,7 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
     const did = dMatch[1];
     let dealers = getStored("dealers", SEED_DEALERS);
     if (method === "PUT") {
-      dealers = dealers.map((item) => (item.id === did ? { ...item, ...body } : item));
+      dealers = dealers.map((item) => (item.id === did ? { ...item, ...body, id: did } : item));
       setStored("dealers", dealers);
       return body;
     }
@@ -193,7 +386,7 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
     const eid = eMatch[1];
     let expenses = getStored("expenses", SEED_EXPENSES);
     if (method === "PUT") {
-      expenses = expenses.map((item) => (item.id === eid ? { ...item, ...body } : item));
+      expenses = expenses.map((item) => (item.id === eid ? { ...item, ...body, id: eid } : item));
       setStored("expenses", expenses);
       return body;
     }
@@ -204,103 +397,73 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
     }
   }
 
-  // Orders (Sales / Purchases)
+  // Orders: List or Create (/sales, /purchases, /orders)
   if (p === "/sales" || p === "/purchases") {
     const kind = p.includes("sale") ? "sale" : "purchase";
-    const orders = getStored("orders", SEED_ORDERS);
-    return orders
-      .filter((o) => o.kind === kind)
-      .map((o) => {
-        const paid = (o.payments || []).reduce((s: number, pm: any) => s + (pm.amount || 0), 0);
-        const balance = Math.max(0, o.total - paid);
-        const pay_status = balance <= 0.5 ? "cleared" : paid > 0 ? "partial" : "unpaid";
-        return { ...o, paid, balance, pay_status };
-      });
+    if (method === "POST") {
+      return createOrderInStore(kind, body);
+    }
+    const orders = getStored<any[]>("orders", SEED_ORDERS);
+    return orders.filter((o) => o.kind === kind).map(serializeOrder);
   }
 
   if (p === "/orders") {
-    const orders = getStored("orders", SEED_ORDERS);
-    const kind = body.kind || "sale";
-    const total = (body.items || []).reduce(
-      (s: number, it: any) => s + (Number(it.qty) || 0) * (Number(it.rate) || 0),
-      0
-    );
-    const payments = [];
-    if (body.initial_payment > 0) {
-      payments.push({ amount: Number(body.initial_payment), date: new Date().toISOString(), note: "Initial payment" });
+    if (method === "POST") {
+      return createOrderInStore(body?.kind || "sale", body);
     }
-    const no = {
-      ...body,
-      id: "ord_" + Date.now(),
-      kind,
-      total,
-      payments,
-      date: body.date || new Date().toISOString(),
-      ref_no: body.ref_no || (kind === "sale" ? "INV-" + Date.now().toString().slice(-4) : "PO-" + Date.now().toString().slice(-4)),
-    };
-    orders.unshift(no);
-    setStored("orders", orders);
+    const orders = getStored<any[]>("orders", SEED_ORDERS);
+    return orders.map(serializeOrder);
+  }
 
-    // Adjust inventory
-    const products = getStored("products", SEED_PRODUCTS);
-    const multiplier = kind === "purchase" ? 1 : -1;
-    (body.items || []).forEach((it: any) => {
-      const prod = products.find((pr) => pr.id === it.product_id || pr.model === it.model);
-      if (prod) {
-        prod.qty_on_hand = Math.max(0, prod.qty_on_hand + multiplier * (Number(it.qty) || 0));
+  // Order Details / Edit / Delete (/sales/:id, /purchases/:id, /orders/:id)
+  const orderMatch = p.match(/^\/(sales|purchases|orders)\/([^/]+)$/);
+  if (orderMatch) {
+    const oid = orderMatch[2];
+    if (method === "PUT") {
+      return updateOrderInStore(oid, body);
+    }
+    if (method === "DELETE") {
+      let orders = getStored<any[]>("orders", SEED_ORDERS);
+      const target = orders.find((item) => item.id === oid);
+      if (target) {
+        // Reverse stock
+        const products = getStored<any[]>("products", SEED_PRODUCTS);
+        const mult = target.kind === "purchase" ? -1 : 1;
+        (target.items || []).forEach((it: any) => {
+          const prod = products.find((pr) => pr.id === it.product_id || pr.model === it.model);
+          if (prod) prod.qty_on_hand = Math.max(0, (Number(prod.qty_on_hand) || 0) + mult * (Number(it.qty) || 0));
+        });
+        setStored("products", products);
       }
-    });
-    setStored("products", products);
-
-    return no;
-  }
-
-  // Order Details
-  const ordDetailMatch = p.match(/^\/(sales|purchases)\/([^/]+)$/);
-  if (ordDetailMatch) {
-    const oid = ordDetailMatch[2];
-    const orders = getStored("orders", SEED_ORDERS);
-    const o = orders.find((item) => item.id === oid);
-    if (!o) throw new Error("Order not found");
-    const paid = (o.payments || []).reduce((s: number, pm: any) => s + (pm.amount || 0), 0);
-    const balance = Math.max(0, o.total - paid);
-    const pay_status = balance <= 0.5 ? "cleared" : paid > 0 ? "partial" : "unpaid";
-    return { ...o, paid, balance, pay_status };
-  }
-
-  // Add Payment
-  const payMatch = p.match(/^\/orders\/([^/]+)\/payments$/);
-  if (payMatch) {
-    const oid = payMatch[1];
-    const orders = getStored("orders", SEED_ORDERS);
-    const o = orders.find((item) => item.id === oid);
-    if (o) {
-      o.payments = o.payments || [];
-      o.payments.push({ amount: Number(body.amount), note: body.note || "", date: new Date().toISOString() });
+      orders = orders.filter((item) => item.id !== oid);
       setStored("orders", orders);
       return { ok: true };
     }
+    // GET single order
+    const orders = getStored<any[]>("orders", SEED_ORDERS);
+    const o = orders.find((item) => item.id === oid);
+    if (!o) throw new Error("Order not found: " + oid);
+    return serializeOrder(o);
   }
 
-  // Delete Order
-  const delOrdMatch = p.match(/^\/orders\/([^/]+)$/);
-  if (delOrdMatch && method === "DELETE") {
-    const oid = delOrdMatch[1];
-    let orders = getStored("orders", SEED_ORDERS);
-    const target = orders.find((item) => item.id === oid);
-    if (target) {
-      // Reverse stock
-      const products = getStored("products", SEED_PRODUCTS);
-      const mult = target.kind === "purchase" ? -1 : 1;
-      (target.items || []).forEach((it: any) => {
-        const prod = products.find((pr) => pr.id === it.product_id || pr.model === it.model);
-        if (prod) prod.qty_on_hand = Math.max(0, prod.qty_on_hand + mult * (Number(it.qty) || 0));
+  // Add Payment: /orders/:id/payments
+  const payMatch = p.match(/^\/orders\/([^/]+)\/payments$/);
+  if (payMatch) {
+    const oid = payMatch[1];
+    const orders = getStored<any[]>("orders", SEED_ORDERS);
+    const o = orders.find((item) => item.id === oid);
+    if (o) {
+      o.payments = o.payments || [];
+      o.payments.push({
+        id: "pm_" + Date.now(),
+        amount: Number(body.amount) || 0,
+        note: body.note || "",
+        date: body.date || new Date().toISOString(),
       });
-      setStored("products", products);
+      setStored("orders", orders);
+      return { ok: true };
     }
-    orders = orders.filter((item) => item.id !== oid);
-    setStored("orders", orders);
-    return { ok: true };
+    throw new Error("Order not found for payment: " + oid);
   }
 
   // Dashboard & Reports

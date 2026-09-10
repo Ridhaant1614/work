@@ -8,6 +8,7 @@ const NAV = [
   { to: "/", icon: "⬡", label: "Dashboard", end: true },
 
   { label: "BUSINESS", group: "BUSINESS" },
+  { to: "/billing", icon: "⚡", label: "Billing & POS" },
   { to: "/sales", icon: "🧾", label: "Sales" },
   { to: "/purchases", icon: "📦", label: "Purchases" },
   { to: "/expenses", icon: "💳", label: "Expenses" },
@@ -110,10 +111,10 @@ export default function Layout() {
           <div className="mobile-nav-items">
             {[
               { to: "/", icon: "⬡", label: "Home" },
+              { to: "/billing", icon: "⚡", label: "Billing" },
               { to: "/sales", icon: "🧾", label: "Sales" },
-              { to: "/purchases", icon: "📦", label: "Orders" },
+              { to: "/inventory", icon: "📊", label: "Stock" },
               { to: "/reports", icon: "📈", label: "Reports" },
-              { to: "/dealers", icon: "🏪", label: "Dealers" },
             ].map(it => (
               <NavLink
                 key={it.to}

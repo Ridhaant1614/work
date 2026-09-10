@@ -29,5 +29,15 @@ export function shortDate(iso: string | undefined | null): string {
 
 export function toInputDate(iso: string | undefined | null): string {
   if (!iso) return new Date().toISOString().slice(0, 10);
-  return new Date(iso).toISOString().slice(0, 10);
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return new Date().toISOString().slice(0, 10);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  } catch {
+    return new Date().toISOString().slice(0, 10);
+  }
 }
+

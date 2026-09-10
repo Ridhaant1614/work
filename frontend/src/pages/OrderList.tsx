@@ -111,7 +111,8 @@ export default function OrderList({ kind, title }: OrderListProps) {
                     <td style={{ textAlign: "right", color: o.balance > 0 ? "var(--error)" : "var(--muted)", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{formatINR(o.balance)}</td>
                     <td><PayBadge status={o.pay_status} /></td>
                     <td style={{ color: "var(--muted)", fontSize: 13 }}>{o.age_days > 0 ? `${o.age_days}d` : "—"}</td>
-                    <td onClick={e => e.stopPropagation()}>
+                    <td onClick={e => e.stopPropagation()} style={{ whiteSpace: "nowrap" }}>
+                      <button className="btn btn-ghost btn-icon btn-sm" onClick={() => navigate(`${detailBase}/${o.id}/edit`)} title="Edit order" style={{ marginRight: 4 }}>✏️</button>
                       <button className="btn btn-ghost btn-icon btn-sm" onClick={() => setDeleteId(o.id)} title="Delete order" style={{ color: "var(--error)" }}>🗑</button>
                     </td>
                   </tr>

@@ -129,6 +129,11 @@ class OrderEdit(BaseModel):
     party_name: Optional[str] = None
     notes: Optional[str] = None
 
+class StockAdjustIn(BaseModel):
+    qty_delta: Optional[float] = None
+    new_qty: Optional[float] = None
+    reason: Optional[str] = ""
+
 
 class ExpenseIn(BaseModel):
     category: str
@@ -239,11 +244,25 @@ async def create_product(body: ProductIn, user=Depends(current_user)):
 @api_router.put("/products/{pid}")
 async def update_product(pid: str, body: ProductIn, user=Depends(current_user)):
     changes = body.model_dump(exclude_unset=True)
-    changes.pop("qty_on_hand", None) if changes.get("qty_on_hand") is None else None
     r = await db.products.find_one_and_update({"id": pid, "deleted_at": None},
                                               {"$set": changes}, return_document=True)
     if not r:
         raise HTTPException(404, "Product not found")
+    return clean(r)
+
+
+@api_router.post("/products/{pid}/adjust-stock")
+async def adjust_product_stock(pid: str, body: StockAdjustIn, user=Depends(current_user)):
+    prod = await db.products.find_one({"id": pid, "deleted_at": None})
+    if not prod:
+        raise HTTPException(404, "Product not found")
+    if body.new_qty is not None:
+        new_stock = max(0.0, float(body.new_qty))
+    elif body.qty_delta is not None:
+        new_stock = max(0.0, float(prod.get("qty_on_hand", 0)) + float(body.qty_delta))
+    else:
+        raise HTTPException(400, "Must provide qty_delta or new_qty")
+    r = await db.products.find_one_and_update({"id": pid}, {"$set": {"qty_on_hand": new_stock}}, return_document=True)
     return clean(r)
 
 
@@ -440,8 +459,26 @@ async def edit_order(oid: str, body: OrderEdit, user=Depends(current_user)):
     return serialize_order(o)
 
 
+@api_router.get("/orders/{oid}")
+async def get_order(oid: str, user=Depends(current_user)):
+    o = await db.orders.find_one({"id": oid, "deleted_at": None})
+    if not o:
+        raise HTTPException(404, "Order not found")
+    return serialize_order(o)
+
+
 @api_router.put("/orders/{oid}")
 async def update_order(oid: str, body: OrderIn, user=Depends(current_user)):
+    return await _update_order(oid, body)
+
+
+@api_router.put("/sales/{oid}")
+async def update_sale_order(oid: str, body: OrderIn, user=Depends(current_user)):
+    return await _update_order(oid, body)
+
+
+@api_router.put("/purchases/{oid}")
+async def update_purchase_order(oid: str, body: OrderIn, user=Depends(current_user)):
     return await _update_order(oid, body)
 
 
@@ -453,6 +490,16 @@ async def delete_order(oid: str, user=Depends(current_user)):
     await _adjust_inventory(o["items"], -1 if o["kind"] == "purchase" else +1)
     await db.orders.update_one({"id": oid}, {"$set": {"deleted_at": now_iso()}})
     return {"ok": True}
+
+
+@api_router.delete("/sales/{oid}")
+async def delete_sale_order(oid: str, user=Depends(current_user)):
+    return await delete_order(oid, user)
+
+
+@api_router.delete("/purchases/{oid}")
+async def delete_purchase_order(oid: str, user=Depends(current_user)):
+    return await delete_order(oid, user)
 
 
 # ---------------------------------------------------------------------------

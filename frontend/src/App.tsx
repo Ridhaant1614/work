@@ -17,6 +17,7 @@ import Dealers from "./pages/Dealers";
 import Expenses from "./pages/Expenses";
 import Reports from "./pages/Reports";
 import Staff from "./pages/Staff";
+import Billing from "./pages/Billing";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -107,6 +108,9 @@ export default function App() {
                 }
               >
                 <Route index element={<Dashboard />} />
+
+                {/* Fast POS Billing */}
+                <Route path="billing" element={<Billing />} />
 
                 {/* Sales */}
                 <Route path="sales" element={<OrderList kind="sale" title="Sales Invoices" />} />
