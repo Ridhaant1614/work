@@ -11,6 +11,7 @@ import {
   sendWhatsAppBill,
   printThermalReceipt,
 } from "../receipt";
+import { WhatsAppModal } from "../WhatsAppModal";
 
 type BillLine = {
   key: string;
@@ -42,6 +43,10 @@ export default function Billing() {
   // Post-submission modal
   const [completedBill, setCompletedBill] = useState<BillData | null>(null);
 
+  // Dedicated WhatsApp prompt modal
+  const [showWhatsAppModal, setShowWhatsAppModal] = useState(false);
+  const [whatsAppModalBill, setWhatsAppModalBill] = useState<BillData | null>(null);
+
   const { data: products = [] } = useQuery({
     queryKey: ["products"],
     queryFn: () => apiGet<any[]>("/products"),
@@ -57,8 +62,17 @@ export default function Billing() {
     [dealers, dealerId]
   );
 
-  const effectiveCustomerName = customerType === "dealer" ? (selectedDealer?.shop_name || "") : customerName;
-  const effectivePhone = customerType === "dealer" ? (selectedDealer?.whatsapp || selectedDealer?.phone || "") : customerPhone;
+  function selectDealer(id: string) {
+    setDealerId(id);
+    const d = dealers.find((x: any) => x.id === id);
+    if (d) {
+      setCustomerName(d.shop_name || "");
+      setCustomerPhone(d.whatsapp || d.phone || "");
+    }
+  }
+
+  const effectiveCustomerName = (customerName.trim() || (customerType === "dealer" ? selectedDealer?.shop_name : "") || "").trim();
+  const effectivePhone = (customerPhone.trim() || (customerType === "dealer" ? (selectedDealer?.whatsapp || selectedDealer?.phone) : "") || "").trim();
 
   const totalAmount = useMemo(
     () => lines.reduce((sum, l) => sum + (l.qty * l.rate), 0),
@@ -128,13 +142,15 @@ export default function Billing() {
     setPaidAmount("");
     setLines([]);
     setCompletedBill(null);
+    setShowWhatsAppModal(false);
+    setWhatsAppModalBill(null);
   }
 
   // Create Bill Mutation
   const mutation = useMutation({
     mutationFn: async (actionType: "save" | "thermal" | "whatsapp") => {
       if (!effectiveCustomerName.trim()) {
-        throw new Error(customerType === "dealer" ? "Please select a dealer" : "Please enter customer name");
+        throw new Error(customerType === "dealer" ? "Please select a dealer or enter customer name" : "Please enter customer name");
       }
       if (lines.length === 0) {
         throw new Error("Please add at least one product to the bill");
@@ -196,14 +212,36 @@ export default function Billing() {
       if (actionType === "thermal") {
         printThermalReceipt(billData);
       } else if (actionType === "whatsapp") {
-        const text = generateWhatsAppBillText(billData);
-        sendWhatsAppBill(billData.customerPhone, text);
+        const clean = (billData.customerPhone || "").replace(/[^0-9]/g, "");
+        if (clean.length >= 10) {
+          const text = generateWhatsAppBillText(billData);
+          sendWhatsAppBill(billData.customerPhone, text);
+        } else {
+          // Explicitly ask for customer name and WhatsApp number via modal
+          setWhatsAppModalBill(billData);
+          setShowWhatsAppModal(true);
+        }
       }
     },
     onError: (err: any) => {
       show(err?.message || "Failed to create bill", "error");
     },
   });
+
+  function handleInitiateWhatsApp() {
+    if (lines.length === 0) {
+      show("Please add at least one product to the bill", "error");
+      return;
+    }
+    const clean = effectivePhone.replace(/[^0-9]/g, "");
+    if (!effectiveCustomerName || clean.length < 10) {
+      // Prompt modal to ask for Customer Name & WhatsApp Number
+      setWhatsAppModalBill(previewBillData);
+      setShowWhatsAppModal(true);
+    } else {
+      mutation.mutate("whatsapp");
+    }
+  }
 
   const previewBillData: BillData = {
     refNo,
@@ -245,15 +283,21 @@ export default function Billing() {
       <div className="page-body" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "var(--s5)", alignItems: "start" }}>
         {/* Left Column: Bill Input Form */}
         <div style={{ display: "flex", flexDirection: "column", gap: "var(--s4)" }}>
-          {/* Customer / Dealer Card */}
+          {/* Customer / WhatsApp Card */}
           <div className="card" style={{ display: "flex", flexDirection: "column", gap: "var(--s3)" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div className="section-title" style={{ marginBottom: 0 }}>1. Customer / Dealer</div>
+              <div className="section-title" style={{ marginBottom: 0 }}>1. Customer &amp; WhatsApp Details</div>
               <div className="chip-bar">
                 <button
                   type="button"
                   className={`chip${customerType === "dealer" ? " active" : ""}`}
-                  onClick={() => setCustomerType("dealer")}
+                  onClick={() => {
+                    setCustomerType("dealer");
+                    if (selectedDealer) {
+                      setCustomerName(selectedDealer.shop_name || "");
+                      setCustomerPhone(selectedDealer.whatsapp || selectedDealer.phone || "");
+                    }
+                  }}
                 >
                   🏪 Dealer
                 </button>
@@ -267,13 +311,13 @@ export default function Billing() {
               </div>
             </div>
 
-            {customerType === "dealer" ? (
+            {customerType === "dealer" && (
               <div className="field">
-                <label>Select Dealer *</label>
+                <label>Select Registered Dealer</label>
                 <select
                   className="input"
                   value={dealerId}
-                  onChange={(e) => setDealerId(e.target.value)}
+                  onChange={(e) => selectDealer(e.target.value)}
                 >
                   <option value="">Select registered dealer…</option>
                   {dealers.map((d: any) => (
@@ -284,33 +328,58 @@ export default function Billing() {
                 </select>
                 {selectedDealer && (
                   <div style={{ fontSize: 12, color: "var(--muted)", background: "var(--surface-2)", padding: "6px 10px", borderRadius: "var(--r-sm)" }}>
-                    📍 {selectedDealer.area} | 📞 {selectedDealer.phone || selectedDealer.whatsapp || "No phone"}
+                    📍 {selectedDealer.area} | 📞 Registered Phone: {selectedDealer.phone || selectedDealer.whatsapp || "No phone"}
                   </div>
                 )}
               </div>
-            ) : (
-              <div className="grid-2">
-                <div className="field">
-                  <label>Customer Name *</label>
-                  <input
-                    className="input"
-                    value={customerName}
-                    onChange={(e) => setCustomerName(e.target.value)}
-                    placeholder="e.g. Ramesh Patel"
-                  />
-                </div>
-                <div className="field">
-                  <label>Mobile Number (for WhatsApp)</label>
+            )}
+
+            <div className="grid-2">
+              <div className="field">
+                <label>
+                  Customer / Party Name <span style={{ color: "var(--error)" }}>*</span>
+                </label>
+                <input
+                  className="input"
+                  value={customerName}
+                  onChange={(e) => setCustomerName(e.target.value)}
+                  placeholder={customerType === "dealer" ? "Dealer / Customer Name" : "e.g. Ramesh Patel"}
+                />
+              </div>
+              <div className="field">
+                <label>
+                  WhatsApp Mobile Number <span style={{ color: "var(--error)" }}>*</span>
+                </label>
+                <div style={{ display: "flex", gap: "6px" }}>
+                  <span
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      padding: "0 8px",
+                      background: "var(--surface-2)",
+                      border: "1px solid var(--border)",
+                      borderRadius: "var(--r-sm)",
+                      fontWeight: 700,
+                      fontSize: 12,
+                      color: "var(--muted)",
+                    }}
+                  >
+                    🇮🇳 +91
+                  </span>
                   <input
                     className="input"
                     type="tel"
+                    style={{ flex: 1 }}
                     value={customerPhone}
                     onChange={(e) => setCustomerPhone(e.target.value)}
-                    placeholder="e.g. 9820012345"
+                    placeholder="10-digit WhatsApp number"
                   />
                 </div>
+                <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+                  Bill receipt will be sent directly to this WhatsApp number
+                </div>
               </div>
-            )}
+            </div>
 
             <div className="grid-2">
               <div className="field">
@@ -536,7 +605,7 @@ export default function Billing() {
                 className="btn btn-primary"
                 style={{ padding: "12px", fontSize: 15, background: "#10b981", color: "#fff" }}
                 disabled={mutation.isPending || lines.length === 0}
-                onClick={() => mutation.mutate("whatsapp")}
+                onClick={handleInitiateWhatsApp}
               >
                 📲 Save &amp; Send WhatsApp Bill
               </button>
@@ -635,8 +704,43 @@ export default function Billing() {
                   {completedBill.refNo} — {formatINR(completedBill.total)}
                 </div>
                 <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 4 }}>
-                  Customer: <strong>{completedBill.customerName}</strong> · Stock deducted automatically
+                  Stock deducted automatically from inventory
                 </p>
+              </div>
+
+              {/* Customer & WhatsApp Details in modal */}
+              <div style={{ background: "var(--surface-2)", padding: "12px", borderRadius: "var(--r-md)", display: "flex", flexDirection: "column", gap: "8px" }}>
+                <div className="field" style={{ marginBottom: 0 }}>
+                  <label style={{ fontSize: 12, fontWeight: 700 }}>Customer Name:</label>
+                  <input
+                    className="input"
+                    value={completedBill.customerName}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setCompletedBill(prev => prev ? { ...prev, customerName: val } : null);
+                    }}
+                    placeholder="Customer Name"
+                  />
+                </div>
+                <div className="field" style={{ marginBottom: 0 }}>
+                  <label style={{ fontSize: 12, fontWeight: 700 }}>WhatsApp Number (for sending bill):</label>
+                  <div style={{ display: "flex", gap: "6px" }}>
+                    <span style={{ display: "inline-flex", alignItems: "center", padding: "0 8px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--r-sm)", fontWeight: 700, fontSize: 12, color: "var(--muted)" }}>
+                      +91
+                    </span>
+                    <input
+                      className="input"
+                      type="tel"
+                      style={{ flex: 1 }}
+                      value={completedBill.customerPhone || ""}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setCompletedBill(prev => prev ? { ...prev, customerPhone: val } : null);
+                      }}
+                      placeholder="10-digit WhatsApp number"
+                    />
+                  </div>
+                </div>
               </div>
 
               {/* WhatsApp Text Card */}
@@ -647,7 +751,8 @@ export default function Billing() {
                     className="btn btn-ghost btn-sm"
                     style={{ fontSize: 11 }}
                     onClick={() => {
-                      navigator.clipboard.writeText(whatsAppPreviewText);
+                      const text = generateWhatsAppBillText(completedBill);
+                      navigator.clipboard.writeText(text);
                       show("WhatsApp text copied to clipboard!", "success");
                     }}
                   >
@@ -656,10 +761,10 @@ export default function Billing() {
                 </div>
                 <textarea
                   className="input"
-                  rows={8}
+                  rows={6}
                   readOnly
-                  value={whatsAppPreviewText}
-                  style={{ fontFamily: "monospace", fontSize: 12, background: "var(--surface-2)" }}
+                  value={generateWhatsAppBillText(completedBill)}
+                  style={{ fontFamily: "monospace", fontSize: 11.5, background: "var(--surface-2)" }}
                 />
               </div>
 
@@ -667,10 +772,19 @@ export default function Billing() {
               <div style={{ display: "flex", flexDirection: "column", gap: "var(--s2)" }}>
                 <button
                   className="btn btn-primary"
-                  style={{ background: "#10b981", color: "#fff" }}
-                  onClick={() => sendWhatsAppBill(completedBill.customerPhone, whatsAppPreviewText)}
+                  style={{ background: "#25D366", color: "#fff", fontWeight: 700 }}
+                  onClick={() => {
+                    const text = generateWhatsAppBillText(completedBill);
+                    if (!completedBill.customerPhone || completedBill.customerPhone.replace(/[^0-9]/g, "").length < 10) {
+                      setWhatsAppModalBill(completedBill);
+                      setShowWhatsAppModal(true);
+                    } else {
+                      sendWhatsAppBill(completedBill.customerPhone, text);
+                      show(`Opening WhatsApp for +91 ${completedBill.customerPhone}...`, "success");
+                    }
+                  }}
                 >
-                  📲 Send Directly via WhatsApp {completedBill.customerPhone ? `(${completedBill.customerPhone})` : ""}
+                  📲 Send Directly via WhatsApp {completedBill.customerPhone ? `(+91 ${completedBill.customerPhone})` : ""}
                 </button>
 
                 <button
@@ -701,6 +815,23 @@ export default function Billing() {
           </div>
         </div>
       )}
+
+      {/* Dedicated WhatsApp Prompt & Send Modal */}
+      <WhatsAppModal
+        open={showWhatsAppModal}
+        onClose={() => setShowWhatsAppModal(false)}
+        bill={whatsAppModalBill || (completedBill ? completedBill : previewBillData)}
+        onSent={(name, phone) => {
+          setCustomerName(name);
+          setCustomerPhone(phone);
+          if (completedBill) {
+            setCompletedBill((prev) => prev ? { ...prev, customerName: name, customerPhone: phone } : null);
+          } else {
+            // Save bill and dispatch
+            mutation.mutate("save");
+          }
+        }}
+      />
     </div>
   );
 }

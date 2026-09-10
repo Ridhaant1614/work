@@ -6,6 +6,7 @@ import { Spinner, PayBadge, ConfirmModal } from "../ui";
 import { formatINR, formatDate } from "../format";
 import { useToast } from "../toast";
 import { type BillData, generateWhatsAppBillText, sendWhatsAppBill, printThermalReceipt } from "../receipt";
+import { WhatsAppModal } from "../WhatsAppModal";
 
 type Kind = "sale" | "purchase";
 
@@ -21,6 +22,8 @@ export default function OrderDetail({ kind }: { kind: Kind }) {
   const [payAmount, setPayAmount] = useState("");
   const [payNote, setPayNote] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [showWhatsAppModal, setShowWhatsAppModal] = useState(false);
+  const [whatsAppBill, setWhatsAppBill] = useState<BillData | null>(null);
 
   const { data: o, isLoading, isError, refetch } = useQuery({
     queryKey: [listKey, id],
@@ -140,8 +143,13 @@ ${o.notes ? `<hr class="divider"><div style="font-size:13px;color:#6B7280;font-s
   function handleWhatsApp() {
     const bill = toBillData();
     if (bill) {
-      const text = generateWhatsAppBillText(bill);
-      sendWhatsAppBill(null, text);
+      // Look for customer phone in order notes, e.g. "[Phone: 9820012345]"
+      const phoneMatch = o.notes?.match(/\[Phone:\s*([+0-9\s-]+)\]/i);
+      if (phoneMatch) {
+        bill.customerPhone = phoneMatch[1].trim();
+      }
+      setWhatsAppBill(bill);
+      setShowWhatsAppModal(true);
     }
   }
 
@@ -267,6 +275,12 @@ ${o.notes ? `<hr class="divider"><div style="font-size:13px;color:#6B7280;font-s
         body="Stock changes from this order will be reversed. This cannot be undone."
         onConfirm={() => { setConfirmDelete(false); deleteMutation.mutate(); }}
         onCancel={() => setConfirmDelete(false)}
+      />
+
+      <WhatsAppModal
+        open={showWhatsAppModal}
+        onClose={() => setShowWhatsAppModal(false)}
+        bill={whatsAppBill}
       />
     </div>
   );

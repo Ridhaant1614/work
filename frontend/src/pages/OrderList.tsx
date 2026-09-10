@@ -5,6 +5,8 @@ import { apiGet, apiDelete } from "../api";
 import { PayBadge, Spinner, EmptyState, ConfirmModal } from "../ui";
 import { formatINR, shortDate } from "../format";
 import { useToast } from "../toast";
+import { type BillData } from "../receipt";
+import { WhatsAppModal } from "../WhatsAppModal";
 
 type Kind = "sale" | "purchase";
 
@@ -17,6 +19,30 @@ export default function OrderList({ kind, title }: OrderListProps) {
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [showWhatsAppModal, setShowWhatsAppModal] = useState(false);
+  const [whatsAppBill, setWhatsAppBill] = useState<BillData | null>(null);
+
+  function handleWhatsApp(o: any) {
+    const phoneMatch = o.notes?.match(/\[Phone:\s*([+0-9\s-]+)\]/i);
+    const bill: BillData = {
+      refNo: o.ref_no || o.id,
+      date: o.date,
+      customerName: o.party_name,
+      customerPhone: phoneMatch ? phoneMatch[1].trim() : "",
+      items: (o.items || []).map((it: any) => ({
+        model: it.model,
+        qty: Number(it.qty) || 0,
+        rate: Number(it.rate) || 0,
+        amount: Number(it.amount) || ((Number(it.qty) || 0) * (Number(it.rate) || 0)),
+      })),
+      total: Number(o.total) || 0,
+      paid: Number(o.amount_paid ?? o.paid ?? 0),
+      balance: Number(o.balance ?? 0),
+      notes: o.notes,
+    };
+    setWhatsAppBill(bill);
+    setShowWhatsAppModal(true);
+  }
 
   const endpoint = kind === "sale" ? "/sales" : "/purchases";
   const createRoute = kind === "sale" ? "/sales/new" : "/purchases/new";
@@ -112,6 +138,16 @@ export default function OrderList({ kind, title }: OrderListProps) {
                     <td><PayBadge status={o.pay_status} /></td>
                     <td style={{ color: "var(--muted)", fontSize: 13 }}>{o.age_days > 0 ? `${o.age_days}d` : "—"}</td>
                     <td onClick={e => e.stopPropagation()} style={{ whiteSpace: "nowrap" }}>
+                      {kind === "sale" && (
+                        <button
+                          className="btn btn-ghost btn-icon btn-sm"
+                          onClick={() => handleWhatsApp(o)}
+                          title="Send bill on WhatsApp"
+                          style={{ marginRight: 4, color: "#10b981", fontSize: 13 }}
+                        >
+                          💬
+                        </button>
+                      )}
                       <button className="btn btn-ghost btn-icon btn-sm" onClick={() => navigate(`${detailBase}/${o.id}/edit`)} title="Edit order" style={{ marginRight: 4 }}>✏️</button>
                       <button className="btn btn-ghost btn-icon btn-sm" onClick={() => setDeleteId(o.id)} title="Delete order" style={{ color: "var(--error)" }}>🗑</button>
                     </td>
@@ -129,6 +165,12 @@ export default function OrderList({ kind, title }: OrderListProps) {
         body="Stock changes from this order will be reversed. This cannot be undone."
         onConfirm={() => { if (deleteId) { deleteMutation.mutate(deleteId); setDeleteId(null); } }}
         onCancel={() => setDeleteId(null)}
+      />
+
+      <WhatsAppModal
+        open={showWhatsAppModal}
+        onClose={() => setShowWhatsAppModal(false)}
+        bill={whatsAppBill}
       />
 
       <button className="fab" onClick={() => navigate(createRoute)} title={`New ${kind}`}>+</button>

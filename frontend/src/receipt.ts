@@ -64,13 +64,24 @@ export function generateWhatsAppBillText(bill: BillData): string {
 }
 
 /**
- * Open WhatsApp with prefilled bill text
+ * Sanitize and format Indian/international phone numbers for WhatsApp
+ */
+export function cleanWhatsAppNumber(phone: string | undefined | null): string {
+  let clean = (phone || "").replace(/[^0-9]/g, "");
+  if (clean.startsWith("0") && clean.length === 11) {
+    clean = clean.slice(1);
+  }
+  if (clean.length === 10) {
+    clean = "91" + clean;
+  }
+  return clean;
+}
+
+/**
+ * Open WhatsApp with prefilled bill text targeted to customer phone
  */
 export function sendWhatsAppBill(phone: string | undefined | null, billText: string) {
-  let cleanPhone = (phone || "").replace(/[^0-9]/g, "");
-  if (cleanPhone.length === 10) {
-    cleanPhone = "91" + cleanPhone;
-  }
+  const cleanPhone = cleanWhatsAppNumber(phone);
   const url = cleanPhone
     ? `https://wa.me/${cleanPhone}?text=${encodeURIComponent(billText)}`
     : `https://wa.me/?text=${encodeURIComponent(billText)}`;
