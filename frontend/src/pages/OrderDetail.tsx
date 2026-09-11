@@ -1,11 +1,11 @@
 import React, { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiGet, apiPost, apiDelete } from "../api";
+import { apiGet, apiPost, apiPatch, apiPut, apiDelete } from "../api";
 import { Spinner, PayBadge, ConfirmModal } from "../ui";
 import { formatINR, formatDate } from "../format";
 import { useToast } from "../toast";
-import { type BillData, generateWhatsAppBillText, sendWhatsAppBill, printThermalReceipt } from "../receipt";
+import { type BillData, printTaxInvoice } from "../receipt";
 import { WhatsAppModal } from "../WhatsAppModal";
 
 type Kind = "sale" | "purchase";
@@ -21,13 +21,33 @@ export default function OrderDetail({ kind }: { kind: Kind }) {
 
   const [payAmount, setPayAmount] = useState("");
   const [payNote, setPayNote] = useState("");
+  const [payMethod, setPayMethod] = useState("RTGS");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [showWhatsAppModal, setShowWhatsAppModal] = useState(false);
   const [whatsAppBill, setWhatsAppBill] = useState<BillData | null>(null);
 
+  // Status Change Modal State
+  const [showStatusModal, setShowStatusModal] = useState(false);
+  const [selectedStatus, setSelectedStatus] = useState<"cleared" | "unpaid" | "partial">("cleared");
+  const [customPaidAmount, setCustomPaidAmount] = useState("");
+  const [statusChangeNote, setStatusChangeNote] = useState("");
+  const [statusPayMethod, setStatusPayMethod] = useState("RTGS");
+
+  // Payment item editing
+  const [editingPaymentId, setEditingPaymentId] = useState<string | null>(null);
+  const [editAmount, setEditAmount] = useState("");
+  const [editNote, setEditNote] = useState("");
+  const [deletePaymentId, setDeletePaymentId] = useState<string | null>(null);
+
   const { data: o, isLoading, isError, refetch } = useQuery({
     queryKey: [listKey, id],
     queryFn: () => apiGet(`${isSale ? "/sales" : "/purchases"}/${id}`),
+  });
+
+  const { data: dealers = [] } = useQuery({
+    queryKey: ["dealers"],
+    queryFn: () => apiGet<any[]>("/dealers"),
+    enabled: isSale,
   });
 
   function invalidateAll() {
@@ -39,13 +59,61 @@ export default function OrderDetail({ kind }: { kind: Kind }) {
   }
 
   const payMutation = useMutation({
-    mutationFn: () => apiPost(`/orders/${id}/payments`, { amount: parseFloat(payAmount) || 0, note: payNote.trim() }),
+    mutationFn: () => {
+      const fullNote = payNote.trim() ? `[${payMethod}] ${payNote.trim()}` : `Paid via ${payMethod}`;
+      return apiPost(`/orders/${id}/payments`, {
+        amount: parseFloat(payAmount) || 0,
+        note: fullNote,
+        method: payMethod,
+      });
+    },
     onSuccess: () => {
       setPayAmount(""); setPayNote("");
       invalidateAll(); refetch();
       show("Payment recorded", "success");
     },
-    onError: (e: any) => show(e?.message || "Failed", "error"),
+    onError: (e: any) => show(e?.message || "Failed to record payment", "error"),
+  });
+
+  const statusMutation = useMutation({
+    mutationFn: () => {
+      const amt = selectedStatus === "partial" ? parseFloat(customPaidAmount) || 0 : undefined;
+      const combinedNote = selectedStatus !== "unpaid"
+        ? (statusChangeNote.trim() ? `[${statusPayMethod}] ${statusChangeNote.trim()}` : `Settled via ${statusPayMethod}`)
+        : (statusChangeNote.trim() || undefined);
+      return apiPatch(`/orders/${id}/payment-status`, {
+        status: selectedStatus,
+        amount_paid: amt,
+        note: combinedNote,
+      });
+    },
+    onSuccess: () => {
+      invalidateAll(); refetch();
+      setShowStatusModal(false);
+      show("Payment status updated", "success");
+    },
+    onError: (e: any) => show(e?.message || "Failed to update payment status", "error"),
+  });
+
+  const editPayMutation = useMutation({
+    mutationFn: ({ pid, amount, note }: { pid: string; amount: number; note: string }) =>
+      apiPut(`/orders/${id}/payments/${pid}`, { amount, note }),
+    onSuccess: () => {
+      setEditingPaymentId(null);
+      invalidateAll(); refetch();
+      show("Payment record updated", "success");
+    },
+    onError: (e: any) => show(e?.message || "Failed to update payment", "error"),
+  });
+
+  const deletePayMutation = useMutation({
+    mutationFn: (pid: string) => apiDelete(`/orders/${id}/payments/${pid}`),
+    onSuccess: () => {
+      setDeletePaymentId(null);
+      invalidateAll(); refetch();
+      show("Payment record removed", "info");
+    },
+    onError: (e: any) => show(e?.message || "Failed to delete payment", "error"),
   });
 
   const deleteMutation = useMutation({
@@ -61,214 +129,466 @@ export default function OrderDetail({ kind }: { kind: Kind }) {
   function addPayment() {
     const amt = parseFloat(payAmount) || 0;
     if (amt <= 0) { show("Enter a valid amount", "error"); return; }
-    if (o && amt > o.balance + 0.5) { show(`Max ${balanceLabel.toLowerCase()} is ${formatINR(o.balance)}`, "error"); return; }
     payMutation.mutate();
   }
 
-  function printInvoice() {
+  function openStatusModal() {
     if (!o) return;
-    const html = `
-<!DOCTYPE html><html><head><title>Invoice ${o.ref_no || o.id.slice(0,8)}</title>
-<style>
-  body { font-family: 'Plus Jakarta Sans', system-ui, sans-serif; padding: 40px; color: #111827; max-width: 600px; margin: auto; }
-  h1 { font-size: 24px; font-weight: 800; color: #0F4C5C; }
-  .sub { color: #6B7280; font-size: 14px; margin-top: 4px; }
-  .divider { border: none; border-top: 1px solid #E5E7EB; margin: 20px 0; }
-  table { width: 100%; border-collapse: collapse; margin-top: 16px; }
-  th { text-align: left; padding: 8px 12px; background: #F9FAFB; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: #6B7280; border-bottom: 1px solid #E5E7EB; }
-  td { padding: 10px 12px; border-bottom: 1px solid #F3F4F6; font-size: 14px; }
-  .right { text-align: right; }
-  .total-row { font-size: 16px; font-weight: 800; background: #E0F2F1; }
-  .status { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; text-transform: uppercase; background: ${o.pay_status === "cleared" ? "#ECFDF5" : o.pay_status === "partial" ? "#FFFBEB" : "#FEF2F2"}; color: ${o.pay_status === "cleared" ? "#059669" : o.pay_status === "partial" ? "#D97706" : "#DC2626"}; }
-  @media print { button { display: none; } }
-</style></head><body>
-<h1>Soneja Electronics</h1>
-<div class="sub">Distribution CRM | Mumbai</div>
-<hr class="divider">
-<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:16px">
-  <div>
-    <div style="font-size:12px;color:#6B7280;font-weight:600;text-transform:uppercase;letter-spacing:.05em">${isSale ? "Invoice To" : "Order From"}</div>
-    <div style="font-size:18px;font-weight:800;margin-top:4px">${o.party_name}</div>
-    <div style="font-size:13px;color:#6B7280;margin-top:2px">${isSale ? "Dealer" : "Supplier"}</div>
-  </div>
-  <div style="text-align:right">
-    <div style="font-size:20px;font-weight:800;color:#0F4C5C">${o.ref_no || "No Ref"}</div>
-    <div style="font-size:13px;color:#6B7280;margin-top:4px">${formatDate(o.date)}</div>
-    <div style="margin-top:8px"><span class="status">${o.pay_status}</span></div>
-  </div>
-</div>
-<table>
-  <thead><tr><th>Product</th><th class="right">Qty</th><th class="right">Rate</th><th class="right">Amount</th></tr></thead>
-  <tbody>
-    ${(o.items || []).map((it: any) => `<tr><td>${it.model}</td><td class="right">${it.qty}</td><td class="right">₹${it.rate.toLocaleString("en-IN")}</td><td class="right">₹${it.amount.toLocaleString("en-IN")}</td></tr>`).join("")}
-    <tr class="total-row"><td colspan="3" style="text-align:right">Order Total</td><td class="right">₹${o.total.toLocaleString("en-IN")}</td></tr>
-  </tbody>
-</table>
-<hr class="divider">
-<div style="display:flex;justify-content:space-between">
-  <div><div style="font-size:12px;font-weight:600;color:#6B7280">${isSale ? "Amount Received" : "Amount Paid"}</div><div style="font-size:18px;font-weight:800;color:#059669">₹${(o.amount_paid||0).toLocaleString("en-IN")}</div></div>
-  <div style="text-align:right"><div style="font-size:12px;font-weight:600;color:#6B7280">${balanceLabel}</div><div style="font-size:18px;font-weight:800;color:${o.balance > 0 ? "#DC2626" : "#059669"}">₹${(o.balance||0).toLocaleString("en-IN")}</div></div>
-</div>
-${o.notes ? `<hr class="divider"><div style="font-size:13px;color:#6B7280;font-style:italic">Note: ${o.notes}</div>` : ""}
-<button onclick="window.print()" style="margin-top:24px;background:#0F4C5C;color:#fff;border:none;padding:10px 24px;border-radius:12px;font-size:14px;font-weight:700;cursor:pointer;">🖨 Print / Save as PDF</button>
-</body></html>`;
-    const w = window.open("", "_blank");
-    if (w) { w.document.write(html); w.document.close(); }
+    const current = o.pay_status || "unpaid";
+    setSelectedStatus(current === "cleared" ? "cleared" : current === "partial" ? "partial" : "unpaid");
+    setCustomPaidAmount(String(o.amount_paid || ""));
+    setStatusChangeNote("");
+    setShowStatusModal(true);
+  }
+
+  function startEditPayment(p: any) {
+    setEditingPaymentId(p.id);
+    setEditAmount(String(p.amount || 0));
+    setEditNote(p.note || "");
+  }
+
+  function saveEditPayment(pid: string) {
+    const amt = parseFloat(editAmount);
+    if (isNaN(amt) || amt <= 0) {
+      show("Enter a valid payment amount", "error");
+      return;
+    }
+    editPayMutation.mutate({ pid, amount: amt, note: editNote.trim() });
   }
 
   function toBillData(): BillData | null {
     if (!o) return null;
+    const matchedDealer = isSale && o.party_id ? dealers.find((d: any) => d.id === o.party_id) : null;
+    const phoneMatch = o.notes?.match(/\[Phone:\s*([+0-9\s-]+)\]/i);
+    const phone = matchedDealer?.phone || matchedDealer?.whatsapp || (phoneMatch ? phoneMatch[1].trim() : "");
+
     return {
-      refNo: o.ref_no || o.id,
+      refNo: o.ref_no || (isSale ? `SE/${o.id.slice(-4).toUpperCase()}/2026-27` : `PO-${o.id.slice(-4).toUpperCase()}`),
       date: o.date,
       customerName: o.party_name,
+      customerPhone: phone,
+      customerAddress: matchedDealer?.address || matchedDealer?.area || "",
+      customerGstin: matchedDealer?.gstin || "",
+      customerState: "Maharashtra",
+      customerStateCode: "27",
+      isPurchase: !isSale,
+      supplierName: !isSale ? o.party_name : undefined,
       items: (o.items || []).map((it: any) => ({
         model: it.model,
         qty: Number(it.qty) || 0,
         rate: Number(it.rate) || 0,
         amount: Number(it.amount) || (Number(it.qty) * Number(it.rate)),
+        hsn: "85287219",
+        description: "WORLDTECH 2 YEARS WARRANTY",
       })),
       total: Number(o.total) || 0,
       paid: Number(o.amount_paid ?? o.paid ?? 0),
       balance: Number(o.balance ?? 0),
+      payMethod: o.payments?.[0]?.method || (o.payments?.[0]?.note?.match(/\[(.*?)\]/)?.[1]) || o.payments?.[0]?.note || (o.notes?.match(/\[Payment:\s*(.*?)\]/)?.[1]) || (o.pay_status === "cleared" ? "RTGS" : "RTGS / Bank Transfer"),
       notes: o.notes,
     };
   }
 
-  function handleThermal() {
+  function printInvoice() {
     const bill = toBillData();
-    if (bill) printThermalReceipt(bill);
+    if (bill) printTaxInvoice(bill);
   }
 
   function handleWhatsApp() {
     const bill = toBillData();
     if (bill) {
-      // Look for customer phone in order notes, e.g. "[Phone: 9820012345]"
-      const phoneMatch = o.notes?.match(/\[Phone:\s*([+0-9\s-]+)\]/i);
-      if (phoneMatch) {
-        bill.customerPhone = phoneMatch[1].trim();
-      }
       setWhatsAppBill(bill);
       setShowWhatsAppModal(true);
     }
   }
 
+  function badgeClass(status: string) {
+    if (status === "cleared") return "badge-success";
+    if (status === "partial") return "badge-warning";
+    return "badge-danger";
+  }
+
   if (isLoading) return <div className="page-body"><Spinner /></div>;
   if (isError || !o) return <div className="page-body"><div className="empty-state"><div className="empty-icon">⚠️</div><h3>Order not found</h3><button className="btn btn-outline btn-sm" onClick={() => navigate(-1)}>← Back</button></div></div>;
 
+  const matchedDealer = isSale && o.party_id ? dealers.find((d: any) => d.id === o.party_id) : null;
+
   return (
     <div>
+      {/* Header */}
       <div className="page-header">
-        <div>
-          <h1>{isSale ? "Sale Order" : "Purchase Order"}</h1>
-          <p>{o.ref_no ? `Ref: ${o.ref_no} · ` : ""}{o.party_name}</p>
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--s3)" }}>
+          <button className="btn btn-outline btn-sm btn-icon" onClick={() => navigate(isSale ? "/sales" : "/purchases")}>
+            ←
+          </button>
+          <div>
+            <h1>{isSale ? "Sale Invoice" : "Purchase Order"}: {o.ref_no || o.id}</h1>
+            <p>{formatDate(o.date)} · {o.party_name}</p>
+          </div>
         </div>
         <div className="page-header-actions">
-          {isSale && (
-            <>
-              <button className="btn btn-outline btn-sm" style={{ color: "#10b981", borderColor: "#10b981", fontWeight: 700 }} onClick={handleWhatsApp} title="Send via WhatsApp">📲 WhatsApp</button>
-              <button className="btn btn-outline btn-sm" onClick={handleThermal} title="80mm Thermal Receipt">🧾 Thermal</button>
-            </>
-          )}
-          <button className="btn btn-ghost btn-sm" onClick={printInvoice} title="Print / PDF">🖨 Print</button>
-          <button className="btn btn-outline btn-sm" onClick={() => navigate(`${isSale ? "/sales" : "/purchases"}/${id}/edit`)}>✏️ Edit</button>
-          <button className="btn btn-ghost btn-sm" style={{ color: "var(--error)" }} onClick={() => setConfirmDelete(true)}>🗑 Delete</button>
-          <button className="btn btn-outline btn-sm" onClick={() => navigate(-1)}>← Back</button>
+          {/* Change Status Action */}
+          <button className="btn btn-outline btn-sm" onClick={openStatusModal}>
+            ✏️ Change Status
+          </button>
+          <button className="btn btn-outline btn-sm" onClick={printInvoice}>
+            🖨 Print Tax Invoice (A4)
+          </button>
+          <button className="btn btn-primary btn-sm" style={{ background: "#25D366" }} onClick={handleWhatsApp}>
+            📲 WhatsApp Bill
+          </button>
+          <button className="btn btn-outline btn-sm" onClick={() => navigate(`${isSale ? "/sales" : "/purchases"}/${id}/edit`)}>
+            Edit
+          </button>
+          <button className="btn btn-ghost btn-sm btn-icon" style={{ color: "var(--error)" }} onClick={() => setConfirmDelete(true)}>
+            🗑
+          </button>
         </div>
       </div>
 
-      <div className="page-body" style={{ maxWidth: 700, display: "flex", flexDirection: "column", gap: "var(--s5)" }}>
-        {/* Summary Card */}
-        <div className="card" style={{ display: "flex", flexDirection: "column", gap: "var(--s3)" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-            <div>
-              <div style={{ fontWeight: 800, fontSize: 20 }}>{o.party_name}</div>
-              <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 2 }}>{isSale ? "Dealer" : "Supplier"} · {formatDate(o.date)}</div>
-              {o.ref_no && <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 2 }}>Ref: {o.ref_no}</div>}
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "4px" }}>
-              <PayBadge status={o.pay_status} />
-              {o.date && new Date(o.date).getTime() < Date.now() - 86400000 * 2 && (
-                <span className="badge" style={{ background: "var(--surface-2)", color: "var(--muted)", fontSize: 11 }}>📅 Backdated</span>
-              )}
-            </div>
-          </div>
-          {o.balance > 0 && o.age_days > 0 && (
-            <div style={{ fontSize: 13, color: "var(--warning)", fontWeight: 700 }}>⏱ Outstanding since {o.age_days} day{o.age_days === 1 ? "" : "s"}</div>
-          )}
-          {o.notes && <div style={{ fontSize: 13, color: "var(--muted)", fontStyle: "italic", borderTop: "1px solid var(--divider)", paddingTop: "var(--s3)" }}>{o.notes}</div>}
-          <div className="amount-box">
-            <div className="amount-cell"><label>Total</label><strong>{formatINR(o.total)}</strong></div>
-            <div className="amount-cell"><label>{isSale ? "Received" : "Paid"}</label><strong style={{ color: "var(--success)" }}>{formatINR(o.amount_paid)}</strong></div>
-            <div className="amount-cell"><label>{balanceLabel}</label><strong style={{ color: o.balance > 0 ? "var(--error)" : "var(--on-surface)" }}>{formatINR(o.balance)}</strong></div>
-          </div>
-        </div>
-
-        {/* Items */}
-        <div>
-          <div className="section-title">Items</div>
-          <div className="card card-flush">
-            <table>
-              <thead>
-                <tr>
-                  <th>Product</th>
-                  <th style={{ textAlign: "right" }}>Qty</th>
-                  <th style={{ textAlign: "right" }}>Rate</th>
-                  <th style={{ textAlign: "right" }}>Amount</th>
-                </tr>
-              </thead>
-              <tbody>
-                {o.items?.map((it: any, i: number) => (
-                  <tr key={i}>
-                    <td style={{ fontWeight: 600 }}>{it.model}</td>
-                    <td style={{ textAlign: "right" }}>{it.qty}</td>
-                    <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{formatINR(it.rate)}</td>
-                    <td style={{ textAlign: "right", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{formatINR(it.amount)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        {/* Payments */}
-        <div>
-          <div className="section-title">Payment History</div>
-          <div className="card card-flush" style={{ marginBottom: "var(--s4)" }}>
-            {o.payments?.length ? o.payments.map((p: any, i: number) => (
-              <div key={p.id} className="pay-row">
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 700, fontSize: 15, fontVariantNumeric: "tabular-nums" }}>{formatINR(p.amount)}</div>
-                  <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>{formatDate(p.date)}{p.note ? ` · ${p.note}` : ""}</div>
-                </div>
-                <span style={{ color: "var(--success)", fontSize: 18 }}>✓</span>
+      <div className="page-body" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: "var(--s4)", alignItems: "start" }}>
+        {/* Left Column: Details & Items */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--s4)" }}>
+          {/* Party & Order Info */}
+          <div className="card" style={{ display: "flex", flexDirection: "column", gap: "var(--s3)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ fontWeight: 800, fontSize: 16 }}>Party Details</div>
+              <div style={{ display: "flex", alignItems: "center", gap: "var(--s2)" }}>
+                <span className={`badge ${badgeClass(o.pay_status)}`} style={{ textTransform: "capitalize", fontSize: 13, padding: "4px 10px" }}>
+                  {o.pay_status}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  style={{ fontSize: 11, padding: "2px 8px" }}
+                  onClick={openStatusModal}
+                  title="Click to edit payment status"
+                >
+                  ✏️ Edit
+                </button>
               </div>
-            )) : (
-              <div style={{ padding: "var(--s4)", color: "var(--muted)", fontSize: 14 }}>No payments recorded yet.</div>
+            </div>
+
+            <div style={{ fontSize: 14 }}>
+              <strong>{isSale ? "Dealer / Buyer:" : "Supplier:"}</strong> {o.party_name}
+            </div>
+
+            {matchedDealer && (
+              <div style={{ fontSize: 13, color: "var(--muted)", display: "flex", flexDirection: "column", gap: 3 }}>
+                {matchedDealer.gstin && <div><strong>GSTIN:</strong> {matchedDealer.gstin}</div>}
+                {(matchedDealer.address || matchedDealer.area) && <div><strong>Address:</strong> {matchedDealer.address || matchedDealer.area}</div>}
+                {(matchedDealer.whatsapp || matchedDealer.phone) && <div><strong>Phone:</strong> {matchedDealer.whatsapp || matchedDealer.phone}</div>}
+              </div>
+            )}
+
+            {o.notes && (
+              <div style={{ fontSize: 13, background: "var(--surface-2)", padding: "var(--s2) var(--s3)", borderRadius: "var(--r-sm)" }}>
+                <strong>Notes:</strong> {o.notes}
+              </div>
             )}
           </div>
 
-          {o.balance > 0 && (
-            <div className="card" style={{ display: "flex", flexDirection: "column", gap: "var(--s3)" }}>
-              <div style={{ fontWeight: 800, fontSize: 16 }}>Record {isSale ? "Payment Received" : "Payment Made"}</div>
-              <div className="grid-2">
-                <div className="field">
-                  <label>Amount (₹)</label>
-                  <input className="input" type="number" min={0} max={o.balance} value={payAmount} onChange={e => setPayAmount(e.target.value)} placeholder={`Up to ${formatINR(o.balance)}`} />
-                </div>
-                <div className="field">
-                  <label>Note (optional)</label>
-                  <input className="input" value={payNote} onChange={e => setPayNote(e.target.value)} placeholder="e.g. UPI / Cheque" />
-                </div>
-              </div>
-              <button className="btn btn-primary" onClick={addPayment} disabled={payMutation.isPending}>
-                {payMutation.isPending ? "Recording…" : "💰 Add Payment"}
+          {/* Line Items Table */}
+          <div className="card" style={{ display: "flex", flexDirection: "column", gap: "var(--s3)" }}>
+            <div style={{ fontWeight: 800, fontSize: 16 }}>Items &amp; Products ({o.items?.length || 0})</div>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Product / Model</th>
+                    <th style={{ textAlign: "center" }}>Qty</th>
+                    <th style={{ textAlign: "right" }}>Rate</th>
+                    <th style={{ textAlign: "right" }}>Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(o.items || []).map((it: any, i: number) => {
+                    const lineTotal = it.amount || (it.qty * it.rate);
+                    return (
+                      <tr key={i}>
+                        <td style={{ fontWeight: 600 }}>{it.model}</td>
+                        <td style={{ textAlign: "center" }}>{it.qty}</td>
+                        <td style={{ textAlign: "right" }}>{formatINR(it.rate)}</td>
+                        <td style={{ textAlign: "right", fontWeight: 700, color: "var(--brand)" }}>{formatINR(lineTotal)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "2px solid var(--border)", paddingTop: "var(--s3)", marginTop: "var(--s2)" }}>
+              <span style={{ fontWeight: 800, fontSize: 16 }}>Order Total:</span>
+              <span style={{ fontWeight: 800, fontSize: 20, color: "var(--brand)", fontVariantNumeric: "tabular-nums" }}>{formatINR(o.total)}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Right Column: Payment Ledger & Add Payment */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--s4)" }}>
+          {/* Payment Summary Card */}
+          <div className="card" style={{ display: "flex", flexDirection: "column", gap: "var(--s3)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ fontWeight: 800, fontSize: 16 }}>Payment Summary</div>
+              <button className="btn btn-outline btn-sm" onClick={openStatusModal}>
+                ✏️ Change Status
               </button>
             </div>
-          )}
+
+            <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px dashed var(--border)" }}>
+              <span style={{ color: "var(--muted)" }}>Total Bill Amount:</span>
+              <span style={{ fontWeight: 700 }}>{formatINR(o.total)}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px dashed var(--border)" }}>
+              <span style={{ color: "var(--muted)" }}>Total Paid to Date:</span>
+              <span style={{ fontWeight: 700, color: "var(--success)" }}>{formatINR(o.amount_paid ?? o.paid ?? 0)}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", alignItems: "center" }}>
+              <span style={{ fontWeight: 800, fontSize: 15 }}>{balanceLabel} Balance:</span>
+              <span style={{ fontWeight: 800, fontSize: 20, color: o.balance > 0 ? "var(--error)" : "var(--success)", fontVariantNumeric: "tabular-nums" }}>
+                {formatINR(o.balance)}
+              </span>
+            </div>
+          </div>
+
+          {/* Payment History Card with Edit and Delete options */}
+          <div className="card" style={{ display: "flex", flexDirection: "column", gap: "var(--s3)" }}>
+            <div style={{ fontWeight: 800, fontSize: 16 }}>Payment History &amp; Receipts</div>
+            {o.payments && o.payments.length > 0 ? o.payments.map((p: any) => {
+              const isEditing = editingPaymentId === p.id;
+              return (
+                <div key={p.id} style={{ display: "flex", flexDirection: "column", gap: 6, padding: "var(--s3)", background: "var(--surface-2)", borderRadius: "var(--r-sm)" }}>
+                  {isEditing ? (
+                    <div style={{ display: "flex", flexDirection: "column", gap: "var(--s2)" }}>
+                      <div className="grid-2">
+                        <div className="field">
+                          <label style={{ fontSize: 11 }}>Amount (₹)</label>
+                          <input
+                            className="input"
+                            type="number"
+                            value={editAmount}
+                            onChange={(e) => setEditAmount(e.target.value)}
+                          />
+                        </div>
+                        <div className="field">
+                          <label style={{ fontSize: 11 }}>Note / Ref</label>
+                          <input
+                            className="input"
+                            value={editNote}
+                            onChange={(e) => setEditNote(e.target.value)}
+                          />
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", gap: "var(--s2)", justifyContent: "flex-end" }}>
+                        <button className="btn btn-outline btn-sm" onClick={() => setEditingPaymentId(null)}>Cancel</button>
+                        <button
+                          className="btn btn-primary btn-sm"
+                          disabled={editPayMutation.isPending}
+                          onClick={() => {
+                            const val = parseFloat(editAmount);
+                            if (!(val >= 0)) { show("Invalid amount", "error"); return; }
+                            editPayMutation.mutate({ pid: p.id, amount: val, note: editNote.trim() });
+                          }}
+                        >
+                          {editPayMutation.isPending ? "Saving…" : "Save"}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span style={{ fontWeight: 800, color: "var(--success)", fontSize: 15 }}>
+                          +{formatINR(p.amount)}
+                        </span>
+                        <div style={{ display: "flex", alignItems: "center", gap: "var(--s2)" }}>
+                          <span style={{ fontSize: 12, color: "var(--muted)" }}>{formatDate(p.date)}</span>
+                          <button
+                            className="btn btn-ghost btn-sm btn-icon"
+                            title="Edit this payment"
+                            onClick={() => {
+                              setEditingPaymentId(p.id);
+                              setEditAmount(String(p.amount));
+                              setEditNote(p.note || "");
+                            }}
+                          >
+                            ✏️
+                          </button>
+                          <button
+                            className="btn btn-ghost btn-sm btn-icon"
+                            style={{ color: "var(--error)" }}
+                            title="Delete this payment"
+                            onClick={() => setDeletePaymentId(p.id)}
+                          >
+                            🗑
+                          </button>
+                        </div>
+                      </div>
+                      {p.note && (
+                        <div style={{ fontSize: 12, color: "var(--muted)" }}>
+                          Note: {p.note}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              );
+            }) : (
+              <div style={{ padding: "var(--s4)", color: "var(--muted)", fontSize: 14 }}>
+                No payments recorded yet (Status: <strong>{o.pay_status}</strong>).
+              </div>
+            )}
+          </div>
+
+          {/* Add Additional Payment Box */}
+          <div className="card" style={{ display: "flex", flexDirection: "column", gap: "var(--s3)" }}>
+            <div style={{ fontWeight: 800, fontSize: 16 }}>Record {isSale ? "Payment Received" : "Payment Made"}</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "var(--s3)" }}>
+              <div className="field">
+                <label>Amount (₹)</label>
+                <input
+                  className="input"
+                  type="number"
+                  min={0}
+                  value={payAmount}
+                  onChange={(e) => setPayAmount(e.target.value)}
+                  placeholder={o.balance > 0 ? `Up to ${formatINR(o.balance)}` : "Enter amount"}
+                />
+              </div>
+              <div className="field">
+                <label>Payment Mode</label>
+                <select
+                  className="input"
+                  value={payMethod}
+                  onChange={(e) => setPayMethod(e.target.value)}
+                >
+                  <option value="RTGS">RTGS (Bank Transfer)</option>
+                  <option value="NEFT / Bank Transfer">NEFT / Bank Transfer</option>
+                  <option value="IMPS">IMPS</option>
+                  <option value="UPI">UPI / GPay / PhonePe</option>
+                  <option value="Cheque">Cheque</option>
+                  <option value="Cash">Cash</option>
+                </select>
+              </div>
+              <div className="field">
+                <label>Reference / Note (optional)</label>
+                <input
+                  className="input"
+                  value={payNote}
+                  onChange={(e) => setPayNote(e.target.value)}
+                  placeholder="e.g. UTR / Cheque No."
+                />
+              </div>
+            </div>
+            <button className="btn btn-primary" onClick={addPayment} disabled={payMutation.isPending}>
+              {payMutation.isPending ? "Recording…" : `💰 Add Payment via ${payMethod}`}
+            </button>
+          </div>
         </div>
       </div>
 
+      {/* Payment Status Change Modal */}
+      {showStatusModal && (
+        <div className="modal-overlay" onClick={() => setShowStatusModal(false)}>
+          <div className="modal" style={{ maxWidth: 480, width: "100%" }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Change Payment Status</h3>
+              <button className="modal-close" onClick={() => setShowStatusModal(false)}>✕</button>
+            </div>
+            <div className="modal-body" style={{ display: "flex", flexDirection: "column", gap: "var(--s4)" }}>
+              <p style={{ color: "var(--muted)", fontSize: 13, margin: 0 }}>
+                Update the payment status for <strong>{o.party_name}</strong> ({o.ref_no || id}).
+                Order Total: <strong>{formatINR(o.total)}</strong>.
+              </p>
+
+              <div className="field">
+                <label>Target Status</label>
+                <div style={{ display: "flex", gap: "var(--s2)", marginTop: 4 }}>
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${selectedStatus === "cleared" ? "btn-primary" : "btn-outline"}`}
+                    style={{ flex: 1 }}
+                    onClick={() => setSelectedStatus("cleared")}
+                  >
+                    ✓ Cleared (Paid)
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${selectedStatus === "partial" ? "btn-primary" : "btn-outline"}`}
+                    style={{ flex: 1 }}
+                    onClick={() => setSelectedStatus("partial")}
+                  >
+                    ⏳ Partial
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${selectedStatus === "unpaid" ? "btn-primary" : "btn-outline"}`}
+                    style={{ flex: 1 }}
+                    onClick={() => setSelectedStatus("unpaid")}
+                  >
+                    ✕ Unpaid
+                  </button>
+                </div>
+              </div>
+
+              {selectedStatus !== "unpaid" && (
+                <div className="field">
+                  <label>Payment Mode</label>
+                  <select
+                    className="input"
+                    value={statusPayMethod}
+                    onChange={(e) => setStatusPayMethod(e.target.value)}
+                  >
+                    <option value="RTGS">RTGS (Real Time Gross Settlement)</option>
+                    <option value="NEFT / Bank Transfer">NEFT / Bank Transfer</option>
+                    <option value="IMPS">IMPS</option>
+                    <option value="UPI">UPI / GPay / PhonePe</option>
+                    <option value="Cheque">Cheque</option>
+                    <option value="Cash">Cash</option>
+                  </select>
+                </div>
+              )}
+
+              {selectedStatus === "partial" && (
+                <div className="field">
+                  <label>Total Amount Paid (₹)</label>
+                  <input
+                    className="input"
+                    type="number"
+                    min={0}
+                    max={o.total}
+                    value={customPaidAmount}
+                    onChange={(e) => setCustomPaidAmount(e.target.value)}
+                    placeholder={`e.g. ${Math.round(o.total / 2)}`}
+                  />
+                  <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+                    Remaining balance will be: {formatINR(Math.max(0, o.total - (parseFloat(customPaidAmount) || 0)))}
+                  </div>
+                </div>
+              )}
+
+              <div className="field">
+                <label>Remarks / Reference (optional)</label>
+                <input
+                  className="input"
+                  value={statusChangeNote}
+                  onChange={(e) => setStatusChangeNote(e.target.value)}
+                  placeholder="e.g. UTR / RTGS Ref / Bank Transfer Note"
+                />
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-outline" onClick={() => setShowStatusModal(false)}>
+                Cancel
+              </button>
+              <button className="btn btn-primary" onClick={() => statusMutation.mutate()} disabled={statusMutation.isPending}>
+                {statusMutation.isPending ? "Updating…" : "Apply Status Change"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Order Confirmation */}
       <ConfirmModal
         open={confirmDelete}
         title="Delete this order?"
@@ -277,6 +597,20 @@ ${o.notes ? `<hr class="divider"><div style="font-size:13px;color:#6B7280;font-s
         onCancel={() => setConfirmDelete(false)}
       />
 
+      {/* Delete Single Payment Confirmation */}
+      <ConfirmModal
+        open={!!deletePaymentId}
+        title="Delete payment entry?"
+        body="This recorded payment will be removed and the order balance will recalculate accordingly."
+        onConfirm={() => {
+          if (deletePaymentId) {
+            deletePayMutation.mutate(deletePaymentId);
+          }
+        }}
+        onCancel={() => setDeletePaymentId(null)}
+      />
+
+      {/* WhatsApp Modal */}
       <WhatsAppModal
         open={showWhatsAppModal}
         onClose={() => setShowWhatsAppModal(false)}
@@ -285,3 +619,4 @@ ${o.notes ? `<hr class="divider"><div style="font-size:13px;color:#6B7280;font-s
     </div>
   );
 }
+

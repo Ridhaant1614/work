@@ -139,6 +139,99 @@ class TestOrders:
         # cleanup
         requests.delete(f"{api}/orders/{oid}", headers=owner_headers)
 
+    def test_purchase_payment_status_edit(self, api, owner_headers):
+        prod = self._get_first_product(api, owner_headers)
+        payload = {
+            "party_name": "TEST Supplier Electronics", "ref_no": "TEST-PO-PAY-1",
+            "items": [{"product_id": prod["id"], "model": prod["model"], "qty": 2, "rate": prod["cost_price"]}],
+            "initial_payment": 0,
+        }
+        r = requests.post(f"{api}/purchases", headers=owner_headers, json=payload)
+        assert r.status_code == 201
+        order = r.json()
+        oid = order["id"]
+        total = order["total"]
+        assert order["pay_status"] == "unpaid"
+        assert order["amount_paid"] == 0
+
+        # 1. Update payment status to "cleared"
+        patch_cleared = requests.patch(
+            f"{api}/purchases/{oid}/payment-status",
+            headers=owner_headers,
+            json={"payment_status": "cleared", "note": "Marked fully paid by bank transfer"}
+        )
+        assert patch_cleared.status_code == 200, patch_cleared.text
+        cleared_data = patch_cleared.json()
+        assert cleared_data["pay_status"] == "cleared"
+        assert cleared_data["amount_paid"] == total
+        assert cleared_data["balance"] == 0
+        assert len(cleared_data["payments"]) >= 1
+        pid = cleared_data["payments"][-1]["id"]
+
+        # 2. Edit the payment entry via PUT /orders/{oid}/payments/{pid}
+        half_amt = round(total / 2, 2)
+        put_pmt = requests.put(
+            f"{api}/orders/{oid}/payments/{pid}",
+            headers=owner_headers,
+            json={"amount": half_amt, "note": "Updated partial payment", "method": "Bank Transfer"}
+        )
+        assert put_pmt.status_code == 200, put_pmt.text
+        put_data = put_pmt.json()
+        assert put_data["pay_status"] == "partial"
+        assert put_data["amount_paid"] == half_amt
+        assert put_data["balance"] == round(total - half_amt, 2)
+
+        # 3. Update payment status to "partial" with specific amount
+        quarter_amt = round(total / 4, 2)
+        patch_partial = requests.patch(
+            f"{api}/purchases/{oid}/payment-status",
+            headers=owner_headers,
+            json={"payment_status": "partial", "amount_paid": quarter_amt, "note": "Quarter advance"}
+        )
+        assert patch_partial.status_code == 200
+        part_data = patch_partial.json()
+        assert part_data["pay_status"] == "partial"
+        assert part_data["amount_paid"] == quarter_amt
+
+        # 4. Update payment status to "unpaid"
+        patch_unpaid = requests.patch(
+            f"{api}/purchases/{oid}/payment-status",
+            headers=owner_headers,
+            json={"payment_status": "unpaid"}
+        )
+        assert patch_unpaid.status_code == 200
+        unpaid_data = patch_unpaid.json()
+        assert unpaid_data["pay_status"] == "unpaid"
+        assert unpaid_data["amount_paid"] == 0
+        assert unpaid_data["balance"] == total
+
+        # 5. Delete payment record via DELETE /orders/{oid}/payments/{pid}
+        if unpaid_data.get("payments"):
+            first_pid = unpaid_data["payments"][0]["id"]
+            del_pmt = requests.delete(f"{api}/orders/{oid}/payments/{first_pid}", headers=owner_headers)
+            assert del_pmt.status_code == 200
+
+        # Cleanup order
+        requests.delete(f"{api}/orders/{oid}", headers=owner_headers)
+
+    def test_purchase_create_with_cleared_payment_status(self, api, owner_headers):
+        prod = self._get_first_product(api, owner_headers)
+        payload = {
+            "party_name": "TEST Cash Supplier", "ref_no": "TEST-PO-CASH-1",
+            "items": [{"product_id": prod["id"], "model": prod["model"], "qty": 1, "rate": prod["cost_price"]}],
+            "payment_status": "cleared"
+        }
+        r = requests.post(f"{api}/purchases", headers=owner_headers, json=payload)
+        assert r.status_code == 201
+        order = r.json()
+        oid = order["id"]
+        assert order["pay_status"] == "cleared"
+        assert order["balance"] == 0
+        assert order["amount_paid"] == order["total"]
+
+        # Cleanup
+        requests.delete(f"{api}/orders/{oid}", headers=owner_headers)
+
     def test_list_sales_purchases(self, api, owner_headers):
         assert requests.get(f"{api}/sales", headers=owner_headers).status_code == 200
         p = requests.get(f"{api}/purchases", headers=owner_headers)

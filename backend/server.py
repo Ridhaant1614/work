@@ -97,6 +97,8 @@ class DealerIn(BaseModel):
     whatsapp: Optional[str] = ""
     area: Optional[str] = ""
     notes: Optional[str] = ""
+    gstin: Optional[str] = ""
+    address: Optional[str] = ""
 
 
 class LineItem(BaseModel):
@@ -114,9 +116,23 @@ class OrderIn(BaseModel):
     notes: Optional[str] = ""
     items: List[LineItem]
     initial_payment: Optional[float] = 0
+    payment_status: Optional[str] = None  # "cleared" | "unpaid" | "partial"
+    amount_paid: Optional[float] = None
 
 
 class PaymentIn(BaseModel):
+    amount: float = Field(gt=0)
+    date: Optional[str] = None
+    note: Optional[str] = ""
+
+
+class PaymentStatusUpdate(BaseModel):
+    status: str                          # "cleared" | "unpaid" | "partial"
+    amount_paid: Optional[float] = None
+    note: Optional[str] = ""
+
+
+class PaymentUpdate(BaseModel):
     amount: float = Field(gt=0)
     date: Optional[str] = None
     note: Optional[str] = ""
@@ -349,7 +365,15 @@ async def _create_order(kind: str, body: OrderIn):
                       "rate": li.rate, "cost": cost, "amount": amount})
     total = round(total, 2)
     payments = []
-    if body.initial_payment and body.initial_payment > 0:
+    p_status = (body.payment_status or "").lower().strip()
+    if p_status == "cleared":
+        payments.append({"id": new_id(), "amount": total, "date": body.date or now_iso(), "note": "Initial payment"})
+    elif p_status == "unpaid":
+        pass
+    elif body.amount_paid is not None and body.amount_paid > 0:
+        payments.append({"id": new_id(), "amount": round(body.amount_paid, 2),
+                         "date": body.date or now_iso(), "note": "Initial payment"})
+    elif body.initial_payment and body.initial_payment > 0:
         payments.append({"id": new_id(), "amount": round(body.initial_payment, 2),
                          "date": body.date or now_iso(), "note": "Initial payment"})
     doc = {"id": new_id(), "kind": kind, "party_id": body.party_id,
@@ -385,6 +409,15 @@ async def _update_order(oid: str, body: OrderIn):
     changes = {"party_id": body.party_id, "party_name": body.party_name,
                "ref_no": body.ref_no, "date": body.date or existing.get("date"),
                "notes": body.notes or "", "items": items, "total": round(total, 2)}
+    if body.payment_status is not None or body.amount_paid is not None:
+        p_status = (body.payment_status or "").lower().strip()
+        if p_status == "cleared":
+            changes["payments"] = [{"id": new_id(), "amount": round(total, 2), "date": body.date or now_iso(), "note": "Full payment"}]
+        elif p_status == "unpaid":
+            changes["payments"] = []
+        elif p_status == "partial" or body.amount_paid is not None:
+            amt = round(body.amount_paid or 0, 2)
+            changes["payments"] = [{"id": new_id(), "amount": amt, "date": body.date or now_iso(), "note": "Updated payment"}] if amt > 0 else []
     await db.orders.update_one({"id": oid}, {"$set": changes})
     o = await db.orders.find_one({"id": oid})
     return serialize_order(o)
@@ -444,6 +477,75 @@ async def add_payment(oid: str, body: PaymentIn, user=Depends(current_user)):
     await db.orders.update_one({"id": oid}, {"$push": {"payments": pay}})
     o = await db.orders.find_one({"id": oid})
     return serialize_order(o)
+
+
+@api_router.patch("/orders/{oid}/payment-status")
+@api_router.patch("/purchases/{oid}/payment-status")
+@api_router.patch("/sales/{oid}/payment-status")
+async def update_payment_status(oid: str, body: PaymentStatusUpdate, user=Depends(current_user)):
+    o = await db.orders.find_one({"id": oid, "deleted_at": None})
+    if not o:
+        raise HTTPException(404, "Order not found")
+    status = body.status.lower().strip()
+    total = round(o.get("total", 0), 2)
+    payments = o.get("payments", [])
+    current_paid = round(sum(p.get("amount", 0) for p in payments), 2)
+
+    if status == "cleared":
+        remaining = round(total - current_paid, 2)
+        if remaining > 0:
+            payments.append({"id": new_id(), "amount": remaining, "date": now_iso(), "note": body.note or "Payment cleared"})
+        elif remaining < 0 or not payments:
+            payments = [{"id": new_id(), "amount": total, "date": now_iso(), "note": body.note or "Payment cleared"}]
+    elif status == "unpaid":
+        payments = []
+    elif status == "partial":
+        amt = round(body.amount_paid if body.amount_paid is not None else current_paid, 2)
+        if amt <= 0:
+            payments = []
+        else:
+            payments = [{"id": new_id(), "amount": amt, "date": now_iso(), "note": body.note or "Partial payment"}]
+    else:
+        raise HTTPException(400, f"Invalid status '{body.status}'. Must be 'cleared', 'unpaid', or 'partial'.")
+
+    await db.orders.update_one({"id": oid}, {"$set": {"payments": payments}})
+    o = await db.orders.find_one({"id": oid})
+    return serialize_order(o)
+
+
+@api_router.put("/orders/{oid}/payments/{pid}")
+async def edit_payment(oid: str, pid: str, body: PaymentUpdate, user=Depends(current_user)):
+    o = await db.orders.find_one({"id": oid, "deleted_at": None})
+    if not o:
+        raise HTTPException(404, "Order not found")
+    payments = o.get("payments", [])
+    found = False
+    for p in payments:
+        if p.get("id") == pid:
+            p["amount"] = round(body.amount, 2)
+            if body.note is not None:
+                p["note"] = body.note
+            if body.date:
+                p["date"] = body.date
+            found = True
+            break
+    if not found:
+        raise HTTPException(404, "Payment record not found")
+    await db.orders.update_one({"id": oid}, {"$set": {"payments": payments}})
+    o = await db.orders.find_one({"id": oid})
+    return serialize_order(o)
+
+
+@api_router.delete("/orders/{oid}/payments/{pid}")
+async def delete_payment(oid: str, pid: str, user=Depends(current_user)):
+    o = await db.orders.find_one({"id": oid, "deleted_at": None})
+    if not o:
+        raise HTTPException(404, "Order not found")
+    payments = [p for p in o.get("payments", []) if p.get("id") != pid]
+    await db.orders.update_one({"id": oid}, {"$set": {"payments": payments}})
+    o = await db.orders.find_one({"id": oid})
+    return serialize_order(o)
+
 
 
 @api_router.patch("/orders/{oid}")
@@ -667,7 +769,7 @@ SEED_DEALERS = [
     ("Maruti Electronics", "R.C. Purohit", "9022237138", "Dharavi Main Road, Mumbai - 17"),
     ("Darsh Electronics", "Owner", "9820958939", "Sardar Nagar No. 2, Sion (E), Mumbai - 400022"),
     ("Sagar Electronics", "Babubhai Jain", "8291255388", "Sane Guruji Road, Mumbai - 400011"),
-    ("Seagull Electronics", "V. Thangamani", "7498127917", "Antop Hill, Sion-Koliwada, Mumbai - 400037"),
+    ("Seagull Electronics", "V. Thangamani", "7498127917", "Shop NO A/41, Motial Nehru Nagar, Sion Koliwada Antop Hill, Mumbai - 400037", "27AGTPD8605K1ZX"),
     ("Samsung Smart Plaza (Samyak Sales)", "Sales", "08080032950", "Lalbaug, Mumbai - 400012"),
     ("Sona Electronics", "Suresh J. Surana", "7208560043", "Lower Parel (E), Mumbai - 400013"),
     ("Rishabh Appliances", "Hardik Jain", "8879252866", "Antop Hill, Mumbai - 400037"),
@@ -707,10 +809,12 @@ async def seed():
 
     # Dealers
     if await db.dealers.count_documents({"deleted_at": None}) == 0:
-        for shop, person, phone, area in SEED_DEALERS:
+        for item in SEED_DEALERS:
+            shop, person, phone, area = item[0], item[1], item[2], item[3]
+            gstin = item[4] if len(item) > 4 else ""
             await db.dealers.insert_one({
                 "id": new_id(), "shop_name": shop, "contact_person": person,
-                "phone": phone, "whatsapp": phone, "area": area, "notes": "",
+                "phone": phone, "whatsapp": phone, "area": area, "address": area, "gstin": gstin, "notes": "",
                 "deleted_at": None, "created_at": now_iso()})
         logger.info("Seeded dealers")
 

@@ -41,3 +41,76 @@ export function toInputDate(iso: string | undefined | null): string {
   }
 }
 
+/**
+ * Converts numbers into standard Indian English words (Lakhs, Crores, etc.)
+ * e.g. 36600 -> "INR Thirty Six Thousand Six Hundred Only"
+ * e.g. 5583.06 -> "INR Five Thousand Five Hundred Eighty Three and Six paise Only"
+ */
+export function amountToWords(amount: number | undefined | null): string {
+  if (amount == null || isNaN(amount) || amount === 0) {
+    return "INR Zero Only";
+  }
+
+  const ones = [
+    "", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
+    "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"
+  ];
+  const tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+
+  function numToWordsUnderThousand(n: number): string {
+    let str = "";
+    if (n >= 100) {
+      str += ones[Math.floor(n / 100)] + " Hundred ";
+      n %= 100;
+    }
+    if (n >= 20) {
+      str += tens[Math.floor(n / 10)] + " ";
+      n %= 10;
+    }
+    if (n > 0) {
+      str += ones[n] + " ";
+    }
+    return str.trim();
+  }
+
+  const rounded = Math.round(amount * 100) / 100;
+  const wholePart = Math.floor(rounded);
+  const paisePart = Math.round((rounded - wholePart) * 100);
+
+  let remaining = wholePart;
+  const parts: string[] = [];
+
+  const crore = Math.floor(remaining / 10000000);
+  remaining %= 10000000;
+  if (crore > 0) {
+    parts.push(numToWordsUnderThousand(crore) + " Crore");
+  }
+
+  const lakh = Math.floor(remaining / 100000);
+  remaining %= 100000;
+  if (lakh > 0) {
+    parts.push(numToWordsUnderThousand(lakh) + " Lakh");
+  }
+
+  const thousand = Math.floor(remaining / 1000);
+  remaining %= 1000;
+  if (thousand > 0) {
+    parts.push(numToWordsUnderThousand(thousand) + " Thousand");
+  }
+
+  const hundred = remaining;
+  if (hundred > 0) {
+    parts.push(numToWordsUnderThousand(hundred));
+  }
+
+  const rupeeStr = parts.length > 0 ? parts.join(" ") : "Zero";
+  let result = `INR ${rupeeStr}`;
+
+  if (paisePart > 0) {
+    result += ` and ${numToWordsUnderThousand(paisePart)} paise`;
+  }
+
+  return `${result} Only`;
+}
+
+

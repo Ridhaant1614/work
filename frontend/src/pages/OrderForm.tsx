@@ -25,7 +25,9 @@ export default function OrderForm({ kind }: { kind: Kind }) {
   const [refNo, setRefNo] = useState("");
   const [notes, setNotes] = useState("");
   const [orderDate, setOrderDate] = useState(toInputDate(null));
-  const [initialPayment, setInitialPayment] = useState("");
+  const [payStatus, setPayStatus] = useState<"unpaid" | "partial" | "cleared">("unpaid");
+  const [amountPaid, setAmountPaid] = useState("");
+  const [payMethod, setPayMethod] = useState("RTGS");
   const [lines, setLines] = useState<Line[]>([]);
 
   const { data: products = [] } = useQuery({ queryKey: ["products"], queryFn: () => apiGet<any[]>("/products") });
@@ -43,6 +45,9 @@ export default function OrderForm({ kind }: { kind: Kind }) {
       setRefNo(existing.ref_no ?? "");
       setNotes(existing.notes ?? "");
       setOrderDate(toInputDate(existing.date));
+      const curStatus = existing.pay_status === "cleared" ? "cleared" : (existing.amount_paid > 0 || existing.paid > 0) ? "partial" : "unpaid";
+      setPayStatus(curStatus);
+      setAmountPaid(String(existing.amount_paid ?? existing.paid ?? ""));
       setLines((existing.items || []).map((it: any, i: number) => ({
         key: `${it.product_id || "p"}-${i}-${Date.now()}`,
         product_id: it.product_id,
@@ -60,14 +65,21 @@ export default function OrderForm({ kind }: { kind: Kind }) {
       const isoDate = orderDate
         ? (orderDate.includes("T") ? orderDate : `${orderDate}T12:00:00.000Z`)
         : new Date().toISOString();
+      const calculatedPaid = payStatus === "cleared" ? total : payStatus === "unpaid" ? 0 : parseFloat(amountPaid) || 0;
+      const paymentTag = payStatus !== "unpaid" ? `[Payment: ${payMethod}]` : "";
+      const finalNotes = notes.trim()
+        ? (paymentTag && !notes.includes("[Payment:") ? `${notes.trim()} ${paymentTag}` : notes.trim())
+        : paymentTag;
       const body = {
         party_id: isSale ? partyId : null,
         party_name: isSale ? partyName : partyName.trim(),
         ref_no: refNo.trim() || null,
-        notes: notes.trim(),
+        notes: finalNotes,
         date: isoDate,
         items: lines.map(l => ({ product_id: l.product_id, model: l.model, qty: parseFloat(l.qty) || 0, rate: parseFloat(l.rate) || 0 })),
-        initial_payment: isEdit ? 0 : parseFloat(initialPayment) || 0,
+        payment_status: payStatus,
+        amount_paid: calculatedPaid,
+        initial_payment: calculatedPaid,
       };
       return isEdit ? apiPut(`/orders/${editId}`, body) : apiPost(isSale ? "/sales" : "/purchases", body);
     },
@@ -195,14 +207,86 @@ export default function OrderForm({ kind }: { kind: Kind }) {
 
         {/* Payment + Total */}
         <div className="card" style={{ display: "flex", flexDirection: "column", gap: "var(--s4)" }}>
-          {isEdit ? (
-            <div style={{ background: "var(--surface-2)", padding: "var(--s3) var(--s4)", borderRadius: "var(--r-sm)", fontSize: 13, color: "var(--muted)" }}>
-              💳 <strong>{existing?.payments?.length || 0} recorded payment(s)</strong> totaling <strong>{formatINR(existing?.amount_paid ?? existing?.paid ?? 0)}</strong> will be preserved.
+          <div className="field">
+            <label style={{ fontWeight: 700, marginBottom: 4 }}>
+              Payment Status {isSale ? "(Sale)" : "(Purchase)"}
+            </label>
+            <div style={{ display: "flex", gap: "var(--s2)", flexWrap: "wrap" }}>
+              <button
+                type="button"
+                className={`btn btn-sm ${payStatus === "unpaid" ? "btn-primary" : "btn-outline"}`}
+                style={{ flex: 1 }}
+                onClick={() => { setPayStatus("unpaid"); setAmountPaid("0"); }}
+              >
+                ✕ Unpaid
+              </button>
+              <button
+                type="button"
+                className={`btn btn-sm ${payStatus === "partial" ? "btn-primary" : "btn-outline"}`}
+                style={{ flex: 1 }}
+                onClick={() => {
+                  setPayStatus("partial");
+                  if (!amountPaid || amountPaid === "0") setAmountPaid(String(Math.round(total / 2)));
+                }}
+              >
+                ⏳ Partial Payment
+              </button>
+              <button
+                type="button"
+                className={`btn btn-sm ${payStatus === "cleared" ? "btn-primary" : "btn-outline"}`}
+                style={{ flex: 1 }}
+                onClick={() => { setPayStatus("cleared"); setAmountPaid(String(total)); }}
+              >
+                ✓ Fully Paid (Cleared)
+              </button>
             </div>
-          ) : (
+          </div>
+
+          {payStatus !== "unpaid" && (
             <div className="field">
-              <label>{isSale ? "Payment received now (optional)" : "Payment made now (optional)"}</label>
-              <input className="input" type="number" min={0} value={initialPayment} onChange={e => setInitialPayment(e.target.value)} placeholder="0" />
+              <label>Payment Mode</label>
+              <select
+                className="input"
+                value={payMethod}
+                onChange={e => setPayMethod(e.target.value)}
+              >
+                <option value="RTGS">RTGS (Real Time Gross Settlement)</option>
+                <option value="NEFT / Bank Transfer">NEFT / Bank Transfer</option>
+                <option value="IMPS">IMPS</option>
+                <option value="UPI">UPI / GPay / PhonePe</option>
+                <option value="Cheque">Cheque</option>
+                <option value="Cash">Cash</option>
+              </select>
+            </div>
+          )}
+
+          {payStatus === "partial" && (
+            <div className="field">
+              <label>{isSale ? "Amount Received (₹)" : "Amount Paid (₹)"}</label>
+              <input
+                className="input"
+                type="number"
+                min={0}
+                max={total}
+                value={amountPaid}
+                onChange={e => setAmountPaid(e.target.value)}
+                placeholder="0"
+              />
+              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+                Remaining {isSale ? "receivable" : "payable"} balance: {formatINR(Math.max(0, total - (parseFloat(amountPaid) || 0)))}
+              </div>
+            </div>
+          )}
+
+          {payStatus === "cleared" && (
+            <div style={{ background: "var(--surface-2)", padding: "var(--s3) var(--s4)", borderRadius: "var(--r-sm)", fontSize: 13, color: "var(--success)" }}>
+              ✅ Order will be marked as fully paid ({formatINR(total)}). Balance due: ₹0.
+            </div>
+          )}
+
+          {payStatus === "unpaid" && (
+            <div style={{ background: "var(--surface-2)", padding: "var(--s3) var(--s4)", borderRadius: "var(--r-sm)", fontSize: 13, color: "var(--muted)" }}>
+              ℹ️ Order marked as unpaid. Full amount {formatINR(total)} will be recorded as outstanding.
             </div>
           )}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "var(--brand-ter)", padding: "var(--s4) var(--s5)", borderRadius: "var(--r-md)" }}>

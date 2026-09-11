@@ -16,20 +16,45 @@ export default function Expenses() {
   const [category, setCategory] = useState("Transport");
   const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
+  const [payMethod, setPayMethod] = useState("RTGS");
   const [expDate, setExpDate] = useState(toInputDate(null));
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
   const { data = [], isLoading, isError, refetch } = useQuery({ queryKey: ["expenses"], queryFn: () => apiGet<any[]>("/expenses") });
   const total = data.reduce((a: number, e: any) => a + (e.amount || 0), 0);
 
-  function openNew() { setEditId(null); setCategory("Transport"); setAmount(""); setNote(""); setExpDate(toInputDate(null)); setOpen(true); }
-  function openEdit(e: any) { setEditId(e.id); setCategory(e.category); setAmount(String(e.amount)); setNote(e.note || ""); setExpDate(toInputDate(e.date)); setOpen(true); }
+  function openNew() {
+    setEditId(null);
+    setCategory("Transport");
+    setAmount("");
+    setNote("");
+    setPayMethod("RTGS");
+    setExpDate(toInputDate(null));
+    setOpen(true);
+  }
+  function openEdit(e: any) {
+    setEditId(e.id);
+    setCategory(e.category);
+    setAmount(String(e.amount));
+    const match = (e.note || "").match(/\[(.*?)\]/);
+    if (match) {
+      setPayMethod(match[1]);
+      setNote((e.note || "").replace(/\[.*?\]\s*/, ""));
+    } else {
+      setPayMethod("RTGS");
+      setNote(e.note || "");
+    }
+    setExpDate(toInputDate(e.date));
+    setOpen(true);
+  }
 
   function invalidate() { qc.invalidateQueries({ queryKey: ["expenses"] }); qc.invalidateQueries({ queryKey: ["dashboard"] }); qc.invalidateQueries({ queryKey: ["reports"] }); }
 
   const saveMutation = useMutation({
     mutationFn: () => {
-      const body = { category, amount: parseFloat(amount) || 0, note: note.trim(), date: new Date(expDate).toISOString() };
+      const cleanNote = note.trim();
+      const finalNote = `[${payMethod}]${cleanNote ? ` ${cleanNote}` : ""}`;
+      const body = { category, amount: parseFloat(amount) || 0, note: finalNote, date: new Date(expDate).toISOString() };
       return editId ? apiPut(`/expenses/${editId}`, body) : apiPost("/expenses", body);
     },
     onSuccess: () => { invalidate(); setOpen(false); show(editId ? "Expense updated" : "Expense added", "success"); },
@@ -107,6 +132,17 @@ export default function Expenses() {
               <div className="grid-2">
                 <div className="field"><label>Amount (₹) *</label><input className="input" type="number" min={0} value={amount} onChange={e => setAmount(e.target.value)} placeholder="0" /></div>
                 <div className="field"><label>Date</label><input className="input" type="date" value={expDate} onChange={e => setExpDate(e.target.value)} /></div>
+              </div>
+              <div className="field">
+                <label>Payment Mode</label>
+                <select className="input" value={payMethod} onChange={e => setPayMethod(e.target.value)}>
+                  <option value="RTGS">RTGS (Real Time Gross Settlement)</option>
+                  <option value="NEFT / Net Banking">NEFT / Net Banking</option>
+                  <option value="IMPS">IMPS</option>
+                  <option value="UPI">UPI / GPay / PhonePe</option>
+                  <option value="Cheque">Cheque</option>
+                  <option value="Cash">Cash</option>
+                </select>
               </div>
               <div className="field"><label>Note (optional)</label><input className="input" value={note} onChange={e => setNote(e.target.value)} placeholder="What was this for?" /></div>
             </div>

@@ -1,11 +1,11 @@
 import React, { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { apiGet, apiDelete } from "../api";
+import { apiGet, apiDelete, apiPatch } from "../api";
 import { PayBadge, Spinner, EmptyState, ConfirmModal } from "../ui";
 import { formatINR, shortDate } from "../format";
 import { useToast } from "../toast";
-import { type BillData } from "../receipt";
+import { type BillData, printTaxInvoice } from "../receipt";
 import { WhatsAppModal } from "../WhatsAppModal";
 
 type Kind = "sale" | "purchase";
@@ -22,6 +22,12 @@ export default function OrderList({ kind, title }: OrderListProps) {
   const [showWhatsAppModal, setShowWhatsAppModal] = useState(false);
   const [whatsAppBill, setWhatsAppBill] = useState<BillData | null>(null);
 
+  // Quick payment status change state
+  const [statusOrder, setStatusOrder] = useState<any | null>(null);
+  const [targetStatus, setTargetStatus] = useState<"cleared" | "unpaid" | "partial">("cleared");
+  const [statusPaidAmount, setStatusPaidAmount] = useState("");
+  const [statusPayMethod, setStatusPayMethod] = useState("RTGS");
+
   function handleWhatsApp(o: any) {
     const phoneMatch = o.notes?.match(/\[Phone:\s*([+0-9\s-]+)\]/i);
     const bill: BillData = {
@@ -34,6 +40,8 @@ export default function OrderList({ kind, title }: OrderListProps) {
         qty: Number(it.qty) || 0,
         rate: Number(it.rate) || 0,
         amount: Number(it.amount) || ((Number(it.qty) || 0) * (Number(it.rate) || 0)),
+        hsn: "85287219",
+        description: "WORLDTECH 2 YEARS WARRANTY",
       })),
       total: Number(o.total) || 0,
       paid: Number(o.amount_paid ?? o.paid ?? 0),
@@ -42,6 +50,32 @@ export default function OrderList({ kind, title }: OrderListProps) {
     };
     setWhatsAppBill(bill);
     setShowWhatsAppModal(true);
+  }
+
+  function handlePrint(o: any) {
+    const phoneMatch = o.notes?.match(/\[Phone:\s*([+0-9\s-]+)\]/i);
+    const bill: BillData = {
+      refNo: o.ref_no || (kind === "sale" ? `SE/${o.id.slice(-4).toUpperCase()}/2026-27` : `PO-${o.id.slice(-4).toUpperCase()}`),
+      date: o.date,
+      customerName: o.party_name,
+      customerPhone: phoneMatch ? phoneMatch[1].trim() : "",
+      isPurchase: kind === "purchase",
+      supplierName: kind === "purchase" ? o.party_name : undefined,
+      items: (o.items || []).map((it: any) => ({
+        model: it.model,
+        qty: Number(it.qty) || 0,
+        rate: Number(it.rate) || 0,
+        amount: Number(it.amount) || ((Number(it.qty) || 0) * (Number(it.rate) || 0)),
+        hsn: "85287219",
+        description: "WORLDTECH 2 YEARS WARRANTY",
+      })),
+      total: Number(o.total) || 0,
+      paid: Number(o.amount_paid ?? o.paid ?? 0),
+      balance: Number(o.balance ?? 0),
+      payMethod: (o.notes?.match(/\[Payment:\s*(.*?)\]/)?.[1]) || (o.pay_status === "cleared" ? "RTGS" : "RTGS / Bank Transfer"),
+      notes: o.notes,
+    };
+    printTaxInvoice(bill);
   }
 
   const endpoint = kind === "sale" ? "/sales" : "/purchases";
@@ -58,12 +92,40 @@ export default function OrderList({ kind, title }: OrderListProps) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: [kind === "sale" ? "sales" : "purchases"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
-      qc.invalidateQueries({ queryKey: ["products"] });
       qc.invalidateQueries({ queryKey: ["reports"] });
-      show("Order deleted, stock reversed", "info");
+      qc.invalidateQueries({ queryKey: ["products"] });
+      show("Order deleted and stock adjusted", "info");
     },
-    onError: (e: any) => show(e?.message || "Delete failed", "error"),
+    onError: (e: any) => show(e?.message || "Failed to delete order", "error"),
   });
+
+  const statusMutation = useMutation({
+    mutationFn: () => {
+      if (!statusOrder) return Promise.reject(new Error("No order selected"));
+      const amt = targetStatus === "partial" ? parseFloat(statusPaidAmount) || 0 : undefined;
+      const note = targetStatus !== "unpaid" ? `Settled via ${statusPayMethod}` : undefined;
+      return apiPatch(`/orders/${statusOrder.id}/payment-status`, {
+        status: targetStatus,
+        amount_paid: amt,
+        note,
+      });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: [kind === "sale" ? "sales" : "purchases"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
+      qc.invalidateQueries({ queryKey: ["reports"] });
+      setStatusOrder(null);
+      show("Payment status updated", "success");
+    },
+    onError: (e: any) => show(e?.message || "Status update failed", "error"),
+  });
+
+  function openQuickStatus(o: any) {
+    setStatusOrder(o);
+    const cur = o.pay_status || "unpaid";
+    setTargetStatus(cur === "cleared" ? "cleared" : cur === "partial" ? "partial" : "unpaid");
+    setStatusPaidAmount(String(o.amount_paid || ""));
+  }
 
   const filtered = useMemo(() => {
     let rows = data;
@@ -135,9 +197,21 @@ export default function OrderList({ kind, title }: OrderListProps) {
                     <td style={{ textAlign: "right", fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{formatINR(o.total)}</td>
                     <td style={{ textAlign: "right", color: "var(--success)", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{formatINR(o.amount_paid)}</td>
                     <td style={{ textAlign: "right", color: o.balance > 0 ? "var(--error)" : "var(--muted)", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{formatINR(o.balance)}</td>
-                    <td><PayBadge status={o.pay_status} /></td>
+                    <td onClick={e => { e.stopPropagation(); openQuickStatus(o); }}>
+                      <span title="Click to change payment status" style={{ cursor: "pointer" }}>
+                        <PayBadge status={o.pay_status} />
+                      </span>
+                    </td>
                     <td style={{ color: "var(--muted)", fontSize: 13 }}>{o.age_days > 0 ? `${o.age_days}d` : "—"}</td>
                     <td onClick={e => e.stopPropagation()} style={{ whiteSpace: "nowrap" }}>
+                      <button
+                        className="btn btn-ghost btn-icon btn-sm"
+                        onClick={() => handlePrint(o)}
+                        title="Print Official A4 Tax Invoice"
+                        style={{ marginRight: 4 }}
+                      >
+                        🖨
+                      </button>
                       {kind === "sale" && (
                         <button
                           className="btn btn-ghost btn-icon btn-sm"
@@ -159,6 +233,95 @@ export default function OrderList({ kind, title }: OrderListProps) {
         )}
       </div>
 
+      {/* Quick Status Modal */}
+      {statusOrder && (
+        <div className="modal-overlay" onClick={() => setStatusOrder(null)}>
+          <div className="modal" style={{ maxWidth: 440, width: "100%" }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Change Payment Status</h3>
+              <button className="modal-close" onClick={() => setStatusOrder(null)}>✕</button>
+            </div>
+            <div className="modal-body" style={{ display: "flex", flexDirection: "column", gap: "var(--s4)" }}>
+              <p style={{ color: "var(--muted)", fontSize: 13, margin: 0 }}>
+                {partyLabel}: <strong>{statusOrder.party_name}</strong> · Total: <strong>{formatINR(statusOrder.total)}</strong>
+              </p>
+
+              <div className="field">
+                <label>Status</label>
+                <div style={{ display: "flex", gap: "var(--s2)", marginTop: 4 }}>
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${targetStatus === "cleared" ? "btn-primary" : "btn-outline"}`}
+                    style={{ flex: 1 }}
+                    onClick={() => setTargetStatus("cleared")}
+                  >
+                    ✓ Cleared
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${targetStatus === "partial" ? "btn-primary" : "btn-outline"}`}
+                    style={{ flex: 1 }}
+                    onClick={() => setTargetStatus("partial")}
+                  >
+                    ⏳ Partial
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${targetStatus === "unpaid" ? "btn-primary" : "btn-outline"}`}
+                    style={{ flex: 1 }}
+                    onClick={() => setTargetStatus("unpaid")}
+                  >
+                    ✕ Unpaid
+                  </button>
+                </div>
+              </div>
+
+              {targetStatus !== "unpaid" && (
+                <div className="field">
+                  <label>Payment Mode</label>
+                  <select
+                    className="input"
+                    value={statusPayMethod}
+                    onChange={e => setStatusPayMethod(e.target.value)}
+                  >
+                    <option value="RTGS">RTGS (Real Time Gross Settlement)</option>
+                    <option value="NEFT / Bank Transfer">NEFT / Bank Transfer</option>
+                    <option value="IMPS">IMPS</option>
+                    <option value="UPI">UPI / GPay / PhonePe</option>
+                    <option value="Cheque">Cheque</option>
+                    <option value="Cash">Cash</option>
+                  </select>
+                </div>
+              )}
+
+              {targetStatus === "partial" && (
+                <div className="field">
+                  <label>Amount Paid (₹)</label>
+                  <input
+                    className="input"
+                    type="number"
+                    min={0}
+                    max={statusOrder.total}
+                    value={statusPaidAmount}
+                    onChange={e => setStatusPaidAmount(e.target.value)}
+                    placeholder="0"
+                  />
+                  <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+                    Remaining: {formatINR(Math.max(0, statusOrder.total - (parseFloat(statusPaidAmount) || 0)))}
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-outline" onClick={() => setStatusOrder(null)}>Cancel</button>
+              <button className="btn btn-primary" onClick={() => statusMutation.mutate()} disabled={statusMutation.isPending}>
+                {statusMutation.isPending ? "Updating…" : "Update Status"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <ConfirmModal
         open={!!deleteId}
         title="Delete this order?"
@@ -177,3 +340,4 @@ export default function OrderList({ kind, title }: OrderListProps) {
     </div>
   );
 }
+

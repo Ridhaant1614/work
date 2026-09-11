@@ -9,7 +9,8 @@ import {
   type BillData,
   generateWhatsAppBillText,
   sendWhatsAppBill,
-  printThermalReceipt,
+  printTaxInvoice,
+  COMPANY_DETAILS,
 } from "../receipt";
 import { WhatsAppModal } from "../WhatsAppModal";
 
@@ -148,7 +149,7 @@ export default function Billing() {
 
   // Create Bill Mutation
   const mutation = useMutation({
-    mutationFn: async (actionType: "save" | "thermal" | "whatsapp") => {
+    mutationFn: async (actionType: "save" | "print" | "whatsapp") => {
       if (!effectiveCustomerName.trim()) {
         throw new Error(customerType === "dealer" ? "Please select a dealer or enter customer name" : "Please enter customer name");
       }
@@ -209,8 +210,8 @@ export default function Billing() {
       show("Bill created & inventory stock updated", "success");
       setCompletedBill(billData);
 
-      if (actionType === "thermal") {
-        printThermalReceipt(billData);
+      if (actionType === "print") {
+        printTaxInvoice(billData);
       } else if (actionType === "whatsapp") {
         const clean = (billData.customerPhone || "").replace(/[^0-9]/g, "");
         if (clean.length >= 10) {
@@ -268,7 +269,7 @@ export default function Billing() {
       <div className="page-header">
         <div>
           <h1>⚡ Billing Software &amp; Fast POS</h1>
-          <p>Instant retail/wholesale billing, WhatsApp bill delivery &amp; 80mm thermal receipt printing</p>
+          <p>Instant retail/wholesale billing, WhatsApp bill delivery &amp; GST tax invoice printing</p>
         </div>
         <div className="page-header-actions">
           <button className="btn btn-outline btn-sm" onClick={resetForm}>
@@ -530,10 +531,12 @@ export default function Billing() {
                   value={payMethod}
                   onChange={(e) => setPayMethod(e.target.value)}
                 >
+                  <option value="RTGS">RTGS (Real Time Gross Settlement)</option>
+                  <option value="NEFT / Bank Transfer">NEFT / Bank Transfer</option>
+                  <option value="IMPS">IMPS</option>
                   <option value="UPI">UPI / GPay / PhonePe</option>
-                  <option value="Cash">Cash at Counter</option>
-                  <option value="Bank Transfer">Bank Transfer / NEFT</option>
                   <option value="Cheque">Cheque</option>
+                  <option value="Cash">Cash at Counter</option>
                   <option value="Credit / Udhar">Credit / Udhar (Unpaid)</option>
                 </select>
               </div>
@@ -596,9 +599,9 @@ export default function Billing() {
                 className="btn btn-primary"
                 style={{ padding: "12px", fontSize: 15, background: "var(--brand)" }}
                 disabled={mutation.isPending || lines.length === 0}
-                onClick={() => mutation.mutate("thermal")}
+                onClick={() => mutation.mutate("print")}
               >
-                🖨 Save &amp; Print Thermal Slip (80mm)
+                🖨 Save &amp; Print Tax Invoice (A4)
               </button>
 
               <button
@@ -621,68 +624,101 @@ export default function Billing() {
             </div>
           </div>
 
-          {/* Thermal Slip Live Preview Card */}
+          {/* Tax Invoice Live Preview Card */}
           <div className="card">
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-              <div style={{ fontWeight: 800, fontSize: 14 }}>🧾 Thermal Receipt Preview (80mm)</div>
+              <div style={{ fontWeight: 800, fontSize: 14 }}>📄 Tax Invoice Preview (A4 GST)</div>
               <button
                 className="btn btn-ghost btn-sm"
-                onClick={() => printThermalReceipt(previewBillData)}
+                onClick={() => printTaxInvoice(previewBillData)}
                 disabled={lines.length === 0}
-                title="Print thermal test receipt"
+                title="Print official GST tax invoice"
               >
                 🖨 Test Print
               </button>
             </div>
 
-            <div className="thermal-receipt">
-              <div className="thermal-center">
-                <h3>SONEJA ELECTRONICS</h3>
-                <div>Wholesale Distribution &amp; Retail</div>
-                <div>Mumbai | 📞 9653190285</div>
-              </div>
-              <div className="thermal-dashed"></div>
-              <div className="thermal-row">
-                <span>Bill: {refNo}</span>
-                <span>{billDate}</span>
-              </div>
-              <div className="thermal-row">
-                <span>Party: {effectiveCustomerName || "Counter"}</span>
-                <span>{effectivePhone || ""}</span>
-              </div>
-              <div className="thermal-dashed"></div>
-              {lines.length === 0 ? (
-                <div className="thermal-center" style={{ color: "#888", padding: "6px 0" }}>
-                  (No items selected)
+            <div style={{
+              background: "#fff",
+              color: "#111",
+              border: "1px solid #d1d5db",
+              borderRadius: "var(--r-sm)",
+              padding: "16px",
+              fontFamily: "var(--font-sans)",
+              fontSize: 11,
+              boxShadow: "0 2px 8px rgba(0,0,0,0.06)"
+            }}>
+              <div style={{ textAlign: "center", borderBottom: "2px solid #111", paddingBottom: 8, marginBottom: 8 }}>
+                <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "1px", color: "#666" }}>Tax Invoice</div>
+                <div style={{ fontSize: 15, fontWeight: 900, letterSpacing: "0.5px" }}>{COMPANY_DETAILS.name}</div>
+                <div style={{ fontSize: 9.5, color: "#444", marginTop: 2 }}>{COMPANY_DETAILS.address}</div>
+                <div style={{ fontSize: 9.5, fontWeight: 600, marginTop: 2 }}>
+                  GSTIN: {COMPANY_DETAILS.gstin} | PAN: {COMPANY_DETAILS.pan}
                 </div>
-              ) : (
-                lines.map((it, i) => (
-                  <div key={i} style={{ marginBottom: 4 }}>
-                    <div className="thermal-bold">{it.model}</div>
-                    <div className="thermal-row">
-                      <span>{it.qty} x ₹{it.rate}</span>
-                      <span className="thermal-bold">₹{it.qty * it.rate}</span>
-                    </div>
-                  </div>
-                ))
-              )}
-              <div className="thermal-dashed"></div>
-              <div className="thermal-row thermal-bold">
-                <span>TOTAL:</span>
-                <span>{formatINR(totalAmount)}</span>
               </div>
-              <div className="thermal-row">
-                <span>Paid ({payMethod}):</span>
-                <span>{formatINR(numericPaid)}</span>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 10, paddingBottom: 8, borderBottom: "1px solid #e5e7eb" }}>
+                <div>
+                  <span style={{ color: "#666" }}>Invoice No: </span><strong>{refNo}</strong><br />
+                  <span style={{ color: "#666" }}>Date: </span><strong>{billDate}</strong>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <span style={{ color: "#666" }}>Buyer: </span><strong>{effectiveCustomerName || "Counter Buyer"}</strong><br />
+                  <span style={{ color: "#666" }}>Phone: </span><strong>{effectivePhone || "—"}</strong>
+                </div>
               </div>
-              <div className="thermal-row thermal-bold" style={{ color: balanceDue > 0 ? "#b91c1c" : "#000" }}>
-                <span>Balance Due:</span>
-                <span>{formatINR(balanceDue)}</span>
+
+              <div style={{ marginTop: 8, overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10 }}>
+                  <thead>
+                    <tr style={{ borderBottom: "1px solid #111", textAlign: "left", background: "#f9fafb" }}>
+                      <th style={{ padding: "4px 2px" }}>Description</th>
+                      <th style={{ padding: "4px 2px", textAlign: "center" }}>HSN</th>
+                      <th style={{ padding: "4px 2px", textAlign: "center" }}>Qty</th>
+                      <th style={{ padding: "4px 2px", textAlign: "right" }}>Rate</th>
+                      <th style={{ padding: "4px 2px", textAlign: "right" }}>Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {lines.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} style={{ textAlign: "center", padding: "12px 0", color: "#888" }}>
+                          (No items selected)
+                        </td>
+                      </tr>
+                    ) : (
+                      lines.map((it, i) => (
+                        <tr key={i} style={{ borderBottom: "1px solid #f3f4f6" }}>
+                          <td style={{ padding: "4px 2px", fontWeight: 600 }}>{it.model}</td>
+                          <td style={{ padding: "4px 2px", textAlign: "center", color: "#666" }}>85287219</td>
+                          <td style={{ padding: "4px 2px", textAlign: "center" }}>{it.qty}</td>
+                          <td style={{ padding: "4px 2px", textAlign: "right" }}>₹{it.rate}</td>
+                          <td style={{ padding: "4px 2px", textAlign: "right", fontWeight: 600 }}>₹{it.qty * it.rate}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
               </div>
-              <div className="thermal-double"></div>
-              <div className="thermal-center" style={{ fontSize: 10 }}>
-                *** THANK YOU FOR VISITING ***<br />
-                Save Paper · Digital POS Slip
+
+              <div style={{ marginTop: 8, borderTop: "1px solid #111", paddingTop: 6, display: "flex", flexDirection: "column", gap: 3, fontSize: 10 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 800, fontSize: 12 }}>
+                  <span>Total Amount (Incl. GST):</span>
+                  <span>{formatINR(totalAmount)}</span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", color: "#444" }}>
+                  <span>Paid ({payMethod}):</span>
+                  <span>{formatINR(numericPaid)}</span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, color: balanceDue > 0 ? "#b91c1c" : "#059669" }}>
+                  <span>Balance Due:</span>
+                  <span>{formatINR(balanceDue)}</span>
+                </div>
+              </div>
+
+              <div style={{ marginTop: 8, paddingTop: 6, borderTop: "1px dashed #e5e7eb", fontSize: 8.5, color: "#666", lineHeight: 1.3 }}>
+                <strong>Bank:</strong> {COMPANY_DETAILS.bankName} | A/c: {COMPANY_DETAILS.bankAccount}<br />
+                <strong>IFSC:</strong> {COMPANY_DETAILS.bankIfsc} | Maharashtra (27)
               </div>
             </div>
           </div>
@@ -789,9 +825,9 @@ export default function Billing() {
 
                 <button
                   className="btn btn-outline"
-                  onClick={() => printThermalReceipt(completedBill)}
+                  onClick={() => printTaxInvoice(completedBill)}
                 >
-                  🖨 Print Thermal Receipt (80mm)
+                  🖨 Print Tax Invoice (A4)
                 </button>
               </div>
             </div>

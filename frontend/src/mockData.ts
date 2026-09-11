@@ -21,7 +21,7 @@ export const SEED_DEALERS = [
   { id: "d4", shop_name: "Maruti Electronics", contact_person: "R.C. Purohit", phone: "9022237138", whatsapp: "9022237138", area: "Dharavi Main Road, Mumbai - 17", notes: "" },
   { id: "d5", shop_name: "Darsh Electronics", contact_person: "Owner", phone: "9820958939", whatsapp: "9820958939", area: "Sardar Nagar No. 2, Sion (E), Mumbai - 400022", notes: "" },
   { id: "d6", shop_name: "Sagar Electronics", contact_person: "Babubhai Jain", phone: "8291255388", whatsapp: "8291255388", area: "Sane Guruji Road, Mumbai - 400011", notes: "" },
-  { id: "d7", shop_name: "Seagull Electronics", contact_person: "V. Thangamani", phone: "7498127917", whatsapp: "7498127917", area: "Antop Hill, Sion-Koliwada, Mumbai - 400037", notes: "" },
+  { id: "d7", shop_name: "Seagull Electronics", contact_person: "V. Thangamani", phone: "7498127917", whatsapp: "7498127917", area: "Antop Hill, Sion-Koliwada, Mumbai - 400037", address: "Shop NO A/41, Motial Nehru Nagar, Sion Koliwada Antop Hill, Mumbai - 400037", gstin: "27AGTPD8605K1ZX", notes: "" },
   { id: "d8", shop_name: "Samsung Smart Plaza (Samyak Sales)", contact_person: "Sales", phone: "08080032950", whatsapp: "08080032950", area: "Lalbaug, Mumbai - 400012", notes: "" },
   { id: "d9", shop_name: "Sona Electronics", contact_person: "Suresh J. Surana", phone: "7208560043", whatsapp: "7208560043", area: "Lower Parel (E), Mumbai - 400013", notes: "" },
   { id: "d10", shop_name: "Rishabh Appliances", contact_person: "Hardik Jain", phone: "8879252866", whatsapp: "8879252866", area: "Antop Hill, Mumbai - 400037", notes: "" },
@@ -255,7 +255,20 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
     });
     setStored("products", products);
 
-    // 4. Update order, preserving payments and id
+    // 4. Update order, updating/preserving payments and id
+    let payments = existing.payments || [];
+    if (ordBody.payment_status !== undefined || ordBody.amount_paid !== undefined) {
+      const pStatus = (ordBody.payment_status || "").toLowerCase().trim();
+      if (pStatus === "cleared") {
+        payments = [{ id: "pm_" + Date.now(), amount: total, date: ordBody.date || new Date().toISOString(), note: "Full payment" }];
+      } else if (pStatus === "unpaid") {
+        payments = [];
+      } else if (pStatus === "partial" || ordBody.amount_paid !== undefined) {
+        const amt = Number(ordBody.amount_paid) || 0;
+        payments = amt > 0 ? [{ id: "pm_" + Date.now(), amount: amt, date: ordBody.date || new Date().toISOString(), note: "Updated payment" }] : [];
+      }
+    }
+
     const updated = {
       ...existing,
       party_id: ordBody.party_id !== undefined ? ordBody.party_id : existing.party_id,
@@ -265,6 +278,7 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
       notes: ordBody.notes !== undefined ? ordBody.notes : existing.notes,
       items: newItems,
       total,
+      payments,
       updated_at: new Date().toISOString(),
     };
 
@@ -461,9 +475,65 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
         date: body.date || new Date().toISOString(),
       });
       setStored("orders", orders);
-      return { ok: true };
+      return serializeOrder(o);
     }
     throw new Error("Order not found for payment: " + oid);
+  }
+
+  // Update Payment Status: /(orders|purchases|sales)/:id/payment-status
+  const statusMatch = p.match(/^\/(orders|purchases|sales)\/([^/]+)\/payment-status$/);
+  if (statusMatch && (method === "PATCH" || method === "POST")) {
+    const oid = statusMatch[2];
+    const orders = getStored<any[]>("orders", SEED_ORDERS);
+    const o = orders.find((item) => item.id === oid);
+    if (!o) throw new Error("Order not found: " + oid);
+
+    const status = (body?.status || "").toLowerCase().trim();
+    const total = Number(o.total) || 0;
+    o.payments = o.payments || [];
+    const currentPaid = o.payments.reduce((s: number, pm: any) => s + (Number(pm.amount) || 0), 0);
+
+    if (status === "cleared") {
+      const remaining = Math.round((total - currentPaid) * 100) / 100;
+      if (remaining > 0) {
+        o.payments.push({ id: "pm_" + Date.now(), amount: remaining, note: body?.note || "Payment cleared", date: new Date().toISOString() });
+      } else if (remaining < 0 || o.payments.length === 0) {
+        o.payments = [{ id: "pm_" + Date.now(), amount: total, note: body?.note || "Payment cleared", date: new Date().toISOString() }];
+      }
+    } else if (status === "unpaid") {
+      o.payments = [];
+    } else if (status === "partial") {
+      const amt = Number(body?.amount_paid !== undefined ? body.amount_paid : currentPaid) || 0;
+      o.payments = amt > 0 ? [{ id: "pm_" + Date.now(), amount: amt, note: body?.note || "Partial payment", date: new Date().toISOString() }] : [];
+    }
+    setStored("orders", orders);
+    return serializeOrder(o);
+  }
+
+  // Edit or Delete Payment: /orders/:id/payments/:pid
+  const payItemMatch = p.match(/^\/orders\/([^/]+)\/payments\/([^/]+)$/);
+  if (payItemMatch) {
+    const oid = payItemMatch[1];
+    const pid = payItemMatch[2];
+    const orders = getStored<any[]>("orders", SEED_ORDERS);
+    const o = orders.find((item) => item.id === oid);
+    if (!o) throw new Error("Order not found: " + oid);
+    o.payments = o.payments || [];
+
+    if (method === "PUT") {
+      const pIndex = o.payments.findIndex((item: any) => item.id === pid);
+      if (pIndex === -1) throw new Error("Payment not found: " + pid);
+      o.payments[pIndex].amount = Number(body?.amount) || 0;
+      if (body?.note !== undefined) o.payments[pIndex].note = body.note;
+      if (body?.date) o.payments[pIndex].date = body.date;
+      setStored("orders", orders);
+      return serializeOrder(o);
+    }
+    if (method === "DELETE") {
+      o.payments = o.payments.filter((item: any) => item.id !== pid);
+      setStored("orders", orders);
+      return serializeOrder(o);
+    }
   }
 
   // Dashboard & Reports
