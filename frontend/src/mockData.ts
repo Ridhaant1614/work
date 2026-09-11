@@ -1,4 +1,16 @@
-// In-browser mock data store for GitHub Pages live demo
+// In-browser mock data store for GitHub Pages live demo with Firebase Cloud Sync
+import {
+  syncOrderToFirestore,
+  deleteOrderFromFirestore,
+  syncProductToFirestore,
+  syncProductsBatchToFirestore,
+  deleteProductFromFirestore,
+  syncDealerToFirestore,
+  deleteDealerFromFirestore,
+  syncExpenseToFirestore,
+  deleteExpenseFromFirestore,
+} from "./firebaseSync";
+
 export const SEED_PRODUCTS = [
   { id: "p1", model: "32 Worldtech SM", sku: "32-WORLDTECH-SM", category: "Television", cost_price: 9200, sell_price: 10100, qty_on_hand: 12 },
   { id: "p2", model: "24 Worldtech", sku: "24-WORLDTECH", category: "Television", cost_price: 4800, sell_price: 5300, qty_on_hand: 5 },
@@ -204,6 +216,8 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
       }
     });
     setStored("products", products);
+    syncOrderToFirestore(newOrder);
+    syncProductsBatchToFirestore(products);
 
     return serializeOrder(newOrder);
   }
@@ -284,6 +298,8 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
 
     orders[idx] = updated;
     setStored("orders", orders);
+    syncOrderToFirestore(updated);
+    syncProductsBatchToFirestore(products);
 
     return serializeOrder(updated);
   }
@@ -304,6 +320,7 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
       };
       products.unshift(np);
       setStored("products", products);
+      syncProductToFirestore(np);
       return np;
     }
   }
@@ -322,6 +339,7 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
       prod.qty_on_hand = Math.max(0, (Number(prod.qty_on_hand) || 0) + (Number(body.qty_delta) || 0));
     }
     setStored("products", products);
+    syncProductToFirestore(prod);
     return prod;
   }
 
@@ -346,11 +364,13 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
         return item;
       });
       setStored("products", products);
+      if (updatedProd) syncProductToFirestore(updatedProd);
       return updatedProd || body;
     }
     if (method === "DELETE") {
       products = products.filter((item) => item.id !== pid);
       setStored("products", products);
+      deleteProductFromFirestore(pid);
       return { ok: true };
     }
   }
@@ -363,6 +383,7 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
       const nd = { ...body, id: "d_" + Date.now() };
       dealers.unshift(nd);
       setStored("dealers", dealers);
+      syncDealerToFirestore(nd);
       return nd;
     }
   }
@@ -374,11 +395,14 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
     if (method === "PUT") {
       dealers = dealers.map((item) => (item.id === did ? { ...item, ...body, id: did } : item));
       setStored("dealers", dealers);
+      const updatedD = dealers.find((item) => item.id === did);
+      if (updatedD) syncDealerToFirestore(updatedD);
       return body;
     }
     if (method === "DELETE") {
       dealers = dealers.filter((item) => item.id !== did);
       setStored("dealers", dealers);
+      deleteDealerFromFirestore(did);
       return { ok: true };
     }
   }
@@ -391,6 +415,7 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
       const ne = { ...body, id: "e_" + Date.now(), date: body.date || new Date().toISOString() };
       expenses.unshift(ne);
       setStored("expenses", expenses);
+      syncExpenseToFirestore(ne);
       return ne;
     }
   }
@@ -402,11 +427,14 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
     if (method === "PUT") {
       expenses = expenses.map((item) => (item.id === eid ? { ...item, ...body, id: eid } : item));
       setStored("expenses", expenses);
+      const updatedE = expenses.find((item) => item.id === eid);
+      if (updatedE) syncExpenseToFirestore(updatedE);
       return body;
     }
     if (method === "DELETE") {
       expenses = expenses.filter((item) => item.id !== eid);
       setStored("expenses", expenses);
+      deleteExpenseFromFirestore(eid);
       return { ok: true };
     }
   }
@@ -448,9 +476,11 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
           if (prod) prod.qty_on_hand = Math.max(0, (Number(prod.qty_on_hand) || 0) + mult * (Number(it.qty) || 0));
         });
         setStored("products", products);
+        syncProductsBatchToFirestore(products);
       }
       orders = orders.filter((item) => item.id !== oid);
       setStored("orders", orders);
+      deleteOrderFromFirestore(oid);
       return { ok: true };
     }
     // GET single order
@@ -475,6 +505,7 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
         date: body.date || new Date().toISOString(),
       });
       setStored("orders", orders);
+      syncOrderToFirestore(o);
       return serializeOrder(o);
     }
     throw new Error("Order not found for payment: " + oid);
@@ -507,6 +538,7 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
       o.payments = amt > 0 ? [{ id: "pm_" + Date.now(), amount: amt, note: body?.note || "Partial payment", date: new Date().toISOString() }] : [];
     }
     setStored("orders", orders);
+    syncOrderToFirestore(o);
     return serializeOrder(o);
   }
 
@@ -527,11 +559,13 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
       if (body?.note !== undefined) o.payments[pIndex].note = body.note;
       if (body?.date) o.payments[pIndex].date = body.date;
       setStored("orders", orders);
+      syncOrderToFirestore(o);
       return serializeOrder(o);
     }
     if (method === "DELETE") {
       o.payments = o.payments.filter((item: any) => item.id !== pid);
       setStored("orders", orders);
+      syncOrderToFirestore(o);
       return serializeOrder(o);
     }
   }

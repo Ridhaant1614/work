@@ -1,9 +1,10 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { HashRouter, Routes, Route, Navigate } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AuthProvider, useAuth } from "./auth";
 import { ToastProvider } from "./toast";
 import { Spinner } from "./ui";
+import { startRealtimeSync } from "./firebaseSync";
 
 import Layout from "./Layout";
 import Login from "./pages/Login";
@@ -82,6 +83,10 @@ function PublicRoute({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
+  useEffect(() => {
+    startRealtimeSync(queryClient);
+  }, []);
+
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>

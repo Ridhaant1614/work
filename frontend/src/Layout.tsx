@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { NavLink, useNavigate, Outlet } from "react-router-dom";
 import { useAuth } from "./auth";
 import { useToast } from "./toast";
+import { CloudSyncBadge, CloudSyncModal } from "./CloudSyncModal";
 
 const NAV = [
   { label: "Overview", group: "MAIN" },
@@ -28,6 +29,7 @@ export default function Layout() {
   const navigate = useNavigate();
   const { show } = useToast();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [showCloudSyncModal, setShowCloudSyncModal] = useState(false);
 
   function doLogout() {
     logout();
@@ -71,6 +73,9 @@ export default function Layout() {
         })}
       </nav>
       <div className="sidebar-footer">
+        <div style={{ padding: "0 4px 10px", display: "flex", justifyContent: "center" }}>
+          <CloudSyncBadge onOpenModal={() => setShowCloudSyncModal(true)} />
+        </div>
         <div className="user-chip" onClick={doLogout} title="Click to sign out">
           <div className="avatar" style={{ fontSize: 12 }}>{initials}</div>
           <div className="user-chip-info">
@@ -100,11 +105,20 @@ export default function Layout() {
         <div className="mobile-topbar">
           <button className="hamburger" onClick={() => setSidebarOpen(o => !o)}>☰</button>
           <div className="sidebar-logo-text" style={{ flex: 1 }}>Soneja Electronics</div>
+          <div style={{ marginRight: 8 }}>
+            <CloudSyncBadge onOpenModal={() => setShowCloudSyncModal(true)} />
+          </div>
           <div className="avatar-initials" style={{ width: 32, height: 32, fontSize: 12 }}>{initials}</div>
         </div>
 
         {/* Main outlet */}
         <Outlet />
+
+        {/* Cloud Sync Settings Modal */}
+        <CloudSyncModal
+          isOpen={showCloudSyncModal}
+          onClose={() => setShowCloudSyncModal(false)}
+        />
 
         {/* Mobile bottom nav */}
         <div className="mobile-nav">
