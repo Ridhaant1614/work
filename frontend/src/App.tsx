@@ -114,8 +114,8 @@ export default function App() {
               >
                 <Route index element={<Dashboard />} />
 
-                {/* Fast POS Billing */}
-                <Route path="billing" element={<Billing />} />
+                {/* Billing route redirects to Sales */}
+                <Route path="billing" element={<Navigate to="/sales/new" replace />} />
 
                 {/* Sales */}
                 <Route path="sales" element={<OrderList kind="sale" title="Sales Invoices" />} />

@@ -186,8 +186,8 @@ export default function OrderForm({ kind }: { kind: Kind }) {
                   <span style={{ fontWeight: 700, fontSize: 14 }}>{l.model}</span>
                   <button className="btn btn-ghost btn-icon btn-sm" style={{ color: "var(--error)" }} onClick={() => setLines(p => p.filter(x => x.key !== l.key))}>🗑</button>
                 </div>
-                <div style={{ display: "flex", gap: "var(--s3)" }}>
-                  <div className="field" style={{ flex: 1 }}>
+                <div className="line-item-inputs" style={{ display: "flex", gap: "var(--s3)" }}>
+                  <div className="field" style={{ flex: 1, minWidth: 80 }}>
                     <label>Qty</label>
                     <input className="input" type="number" min={0} value={l.qty} onChange={e => updateLine(l.key, "qty", e.target.value)} />
                   </div>

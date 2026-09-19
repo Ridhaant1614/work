@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { apiGet } from "../api";
@@ -9,14 +9,45 @@ import { formatINR, formatINRCompact, shortDate } from "../format";
 export default function Dashboard() {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const { data, isLoading, isError, refetch } = useQuery({ queryKey: ["dashboard"], queryFn: () => apiGet("/dashboard") });
+  const [stockSearch, setStockSearch] = useState("");
+  const [stockStatusFilter, setStockStatusFilter] = useState<"all" | "in" | "low" | "negative">("all");
+
+  const { data, isLoading, isError, refetch } = useQuery({
+    queryKey: ["dashboard"],
+    queryFn: () => apiGet("/dashboard"),
+  });
+
+  const availableStockList: any[] = data?.available_stock || [];
+
+  const filteredStock = useMemo(() => {
+    let list = availableStockList;
+    if (stockStatusFilter === "in") {
+      list = list.filter((p) => p.qty_on_hand > 2);
+    } else if (stockStatusFilter === "low") {
+      list = list.filter((p) => p.qty_on_hand >= 0 && p.qty_on_hand <= 2);
+    } else if (stockStatusFilter === "negative") {
+      list = list.filter((p) => p.qty_on_hand < 0);
+    }
+
+    if (!stockSearch.trim()) return list;
+    const q = stockSearch.toLowerCase();
+    return list.filter(
+      (p) =>
+        p.model?.toLowerCase().includes(q) ||
+        p.sku?.toLowerCase().includes(q) ||
+        p.category?.toLowerCase().includes(q)
+    );
+  }, [availableStockList, stockStatusFilter, stockSearch]);
 
   if (isLoading) return <div className="page-body"><Spinner /></div>;
-  if (isError) return (
+  if (isError || !data) return (
     <div className="page-body">
       <div className="empty-state"><div className="empty-icon">⚠️</div><h3>Failed to load</h3><button className="btn btn-primary btn-sm" onClick={() => refetch()}>Retry</button></div>
     </div>
   );
+
+  const negativeCount = data.negative_stock?.length || availableStockList.filter((p: any) => p.qty_on_hand < 0).length;
+  const lowCount = data.low_stock?.length || availableStockList.filter((p: any) => p.qty_on_hand >= 0 && p.qty_on_hand <= 2).length;
 
   const kpis = [
     { label: "Total Sales", value: formatINRCompact(data.total_sales), icon: "📈", color: "var(--brand)", bg: "var(--brand-ter)" },
@@ -24,7 +55,14 @@ export default function Dashboard() {
     { label: "Receivable", value: formatINRCompact(data.receivable), icon: "💰", color: "var(--info)", bg: "var(--info-bg)" },
     { label: "Payable", value: formatINRCompact(data.payable), icon: "🧾", color: "var(--warning)", bg: "var(--warning-bg)" },
     { label: "Inventory Value", value: formatINRCompact(data.inventory_value), icon: "📦", color: "var(--on-surface-2)", bg: "var(--surface-3)" },
-    { label: "Units in Stock", value: String(data.units_in_stock), icon: "🏷️", color: "var(--on-surface-2)", bg: "var(--surface-3)" },
+    {
+      label: "Units in Stock",
+      value: String(data.units_in_stock),
+      icon: "🏷️",
+      color: negativeCount > 0 ? "var(--error)" : "var(--on-surface-2)",
+      bg: negativeCount > 0 ? "var(--error-bg)" : "var(--surface-3)",
+      badge: negativeCount > 0 ? `${negativeCount} model(s) in deficit` : undefined,
+    },
   ];
 
   const quickActions = [
@@ -33,7 +71,7 @@ export default function Dashboard() {
     { label: "Add Expense", icon: "💳", to: "/expenses" },
     { label: "Inventory", icon: "📊", to: "/inventory" },
     { label: "Dealers", icon: "🏪", to: "/dealers" },
-    { label: "Reports", icon: "📈", to: "/reports" },
+    { label: "Analytics", icon: "📈", to: "/reports" },
   ];
 
   return (
@@ -56,7 +94,10 @@ export default function Dashboard() {
             <div key={k.label} className="kpi-card">
               <div className="kpi-icon" style={{ background: k.bg, color: k.color }}>{k.icon}</div>
               <div className="kpi-value" style={{ color: k.color }}>{k.value}</div>
-              <div className="kpi-label">{k.label}</div>
+              <div className="kpi-label" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span>{k.label}</span>
+                {k.badge && <span style={{ fontSize: 11, color: "var(--error)", fontWeight: 700 }}>{k.badge}</span>}
+              </div>
             </div>
           ))}
         </div>
@@ -64,38 +105,199 @@ export default function Dashboard() {
         {/* Quick Actions */}
         <div>
           <div className="section-title">Quick Actions</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))", gap: "var(--s3)" }}>
+          <div className="quick-actions-grid">
             {quickActions.map(a => (
-              <button key={a.label} className="card" style={{ cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: "var(--s2)", padding: "var(--s5)", transition: "box-shadow .2s, transform .2s", border: "1px solid var(--border)", background: "var(--surface)" }}
+              <button key={a.label} className="card quick-action-card"
                 onClick={() => navigate(a.to)}
-                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.boxShadow = "var(--shadow)"; (e.currentTarget as HTMLElement).style.transform = "translateY(-2px)"; }}
-                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.boxShadow = ""; (e.currentTarget as HTMLElement).style.transform = ""; }}
               >
-                <div style={{ fontSize: 28, width: 50, height: 50, borderRadius: "var(--r-md)", background: "var(--brand-ter)", display: "flex", alignItems: "center", justifyContent: "center" }}>{a.icon}</div>
-                <span style={{ fontSize: 13, fontWeight: 700, color: "var(--on-surface-2)", textAlign: "center" }}>{a.label}</span>
+                <div className="quick-action-icon">{a.icon}</div>
+                <span className="quick-action-label">{a.label}</span>
               </button>
             ))}
           </div>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--s5)" }}>
-          {/* Low Stock Alerts */}
+        {/* LIVE AVAILABLE GODOWN STOCK SECTION */}
+        <div className="card">
+          <div className="card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "var(--s3)" }}>
+            <div>
+              <h2 style={{ fontSize: 16, fontWeight: 700 }}>📦 Live Godown Inventory & Available Stock</h2>
+              <p style={{ color: "var(--muted)", fontSize: 13 }}>Current available stock for every model, including backorders & deficit lots</p>
+            </div>
+            <div style={{ display: "flex", gap: "var(--s2)", alignItems: "center", flexWrap: "wrap", width: "100%", maxWidth: "100%" }}>
+              <input
+                className="input input-sm"
+                style={{ flex: "1 1 180px", minWidth: 140 }}
+                placeholder="Search model or SKU…"
+                value={stockSearch}
+                onChange={(e) => setStockSearch(e.target.value)}
+              />
+              <div className="chip-bar" style={{ display: "flex", gap: 4, overflowX: "auto", maxWidth: "100%" }}>
+                <button
+                  className={`btn btn-xs ${stockStatusFilter === "all" ? "btn-primary" : "btn-outline"}`}
+                  onClick={() => setStockStatusFilter("all")}
+                >
+                  All ({availableStockList.length})
+                </button>
+                <button
+                  className={`btn btn-xs ${stockStatusFilter === "in" ? "btn-primary" : "btn-outline"}`}
+                  onClick={() => setStockStatusFilter("in")}
+                >
+                  In Stock
+                </button>
+                <button
+                  className={`btn btn-xs ${stockStatusFilter === "low" ? "btn-primary" : "btn-outline"}`}
+                  onClick={() => setStockStatusFilter("low")}
+                >
+                  Low ({lowCount})
+                </button>
+                <button
+                  className={`btn btn-xs ${stockStatusFilter === "negative" ? "btn-primary" : "btn-outline"}`}
+                  style={negativeCount > 0 ? { borderColor: "var(--error)", color: stockStatusFilter === "negative" ? "#fff" : "var(--error)" } : {}}
+                  onClick={() => setStockStatusFilter("negative")}
+                >
+                  Deficit ({negativeCount})
+                </button>
+                <button className="btn btn-outline btn-xs" onClick={() => navigate("/inventory")}>Full Inventory →</button>
+              </div>
+            </div>
+          </div>
+
+          <div className="table-wrap">
+            <table className="table" style={{ width: "100%", textAlign: "left", fontSize: 13 }}>
+              <thead>
+                <tr style={{ background: "var(--surface-2)", borderBottom: "1px solid var(--border)" }}>
+                  <th style={{ padding: "var(--s3) var(--s4)" }}>TV Model</th>
+                  <th className="hide-mobile" style={{ padding: "var(--s3) var(--s4)" }}>Category</th>
+                  <th className="hide-mobile" style={{ padding: "var(--s3) var(--s4)", textAlign: "right" }}>Selling Price</th>
+                  <th style={{ padding: "var(--s3) var(--s4)", textAlign: "center" }}>Available Stock</th>
+                  <th style={{ padding: "var(--s3) var(--s4)", textAlign: "center" }}>Status</th>
+                  <th style={{ padding: "var(--s3) var(--s4)", textAlign: "right" }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredStock.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} style={{ padding: "var(--s5)", textAlign: "center", color: "var(--muted)" }}>
+                      No products match the selected criteria.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredStock.map((p) => {
+                    const isNegative = p.qty_on_hand < 0;
+                    const isLow = p.qty_on_hand >= 0 && p.qty_on_hand <= 2;
+                    const isZero = p.qty_on_hand === 0;
+
+                    return (
+                      <tr
+                        key={p.id}
+                        style={{
+                          borderBottom: "1px solid var(--divider)",
+                          background: isNegative ? "rgba(239, 68, 68, 0.06)" : undefined,
+                        }}
+                      >
+                        <td style={{ padding: "var(--s3) var(--s4)", fontWeight: 700 }}>
+                          <div>{p.model}</div>
+                          <div style={{ fontSize: 11, color: "var(--muted)", fontWeight: 400 }}>{p.sku}</div>
+                          <div className="show-mobile" style={{ fontSize: 11, color: "var(--brand)", fontWeight: 600, marginTop: 2 }}>
+                            {p.category} · {formatINR(p.sell_price)}
+                          </div>
+                        </td>
+                        <td className="hide-mobile" style={{ padding: "var(--s3) var(--s4)", color: "var(--muted)" }}>{p.category}</td>
+                        <td className="hide-mobile" style={{ padding: "var(--s3) var(--s4)", textAlign: "right", fontWeight: 600 }}>
+                          {formatINR(p.sell_price)}
+                        </td>
+                        <td style={{ padding: "var(--s3) var(--s4)", textAlign: "center" }}>
+                          <span
+                            style={{
+                              fontSize: 14,
+                              fontWeight: 800,
+                              fontVariantNumeric: "tabular-nums",
+                              color: isNegative ? "var(--error)" : isLow ? "var(--warning)" : "var(--success)",
+                            }}
+                          >
+                            {p.qty_on_hand} {Math.abs(p.qty_on_hand) === 1 ? "unit" : "units"}
+                          </span>
+                        </td>
+                        <td style={{ padding: "var(--s3) var(--s4)", textAlign: "center" }}>
+                          {isNegative ? (
+                            <span
+                              className="badge badge-error"
+                              title="Stock was sold before purchase lot was received. Awaiting replenishment."
+                              style={{ fontWeight: 700 }}
+                            >
+                              🔴 {p.qty_on_hand} (Awaiting Lot)
+                            </span>
+                          ) : isZero ? (
+                            <span className="badge badge-error">Out of Stock</span>
+                          ) : isLow ? (
+                            <span className="badge badge-warning">🟡 Low Stock ({p.qty_on_hand})</span>
+                          ) : (
+                            <span className="badge badge-success">🟢 In Stock</span>
+                          )}
+                        </td>
+                        <td style={{ padding: "var(--s3) var(--s4)", textAlign: "right" }}>
+                          <button
+                            className="btn btn-ghost btn-xs"
+                            onClick={() => navigate("/purchases/new")}
+                            title="Create purchase order to replenish lot"
+                          >
+                            + Purchase
+                          </button>
+                          <button
+                            className="btn btn-ghost btn-xs"
+                            onClick={() => navigate("/sales/new")}
+                            title="Invoice this product"
+                          >
+                            + Sale
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="grid-2" style={{ gap: "var(--s5)" }}>
+          {/* Stock Alerts (Negative & Low) */}
           <div>
-            <div className="section-title">⚠️ Low Stock Alerts</div>
+            <div className="section-title">⚠️ Stock Alerts & Replenishment Needs</div>
             <div className="card card-flush">
-              {data.low_stock?.length === 0 ? (
+              {data.negative_stock?.length === 0 && data.low_stock?.length === 0 ? (
                 <div style={{ padding: "var(--s5)", color: "var(--muted)", fontSize: 14 }}>✅ All products are well stocked.</div>
               ) : (
-                data.low_stock?.map((p: any) => (
-                  <div key={p.id} style={{ display: "flex", alignItems: "center", padding: "var(--s3) var(--s4)", borderBottom: "1px solid var(--divider)", gap: "var(--s3)" }}>
-                    <span style={{ fontSize: 20 }}>{p.qty_on_hand <= 0 ? "🔴" : "🟡"}</span>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 700, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.model}</div>
-                      <div style={{ fontSize: 12, color: "var(--muted)" }}>{p.sku}</div>
+                <>
+                  {/* First show any negative stock products */}
+                  {data.negative_stock?.map((p: any) => (
+                    <div key={p.id} style={{ display: "flex", alignItems: "center", padding: "var(--s3) var(--s4)", borderBottom: "1px solid var(--divider)", gap: "var(--s3)", background: "rgba(239, 68, 68, 0.05)" }}>
+                      <span style={{ fontSize: 20 }}>🔴</span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 700, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--error)" }}>
+                          {p.model}
+                        </div>
+                        <div style={{ fontSize: 12, color: "var(--muted)" }}>Sold before lot received · Need {Math.abs(p.qty_on_hand)} unit(s)</div>
+                      </div>
+                      <span className="badge badge-error">{p.qty_on_hand} (Awaiting Lot)</span>
                     </div>
-                    <span className={`badge ${p.qty_on_hand <= 0 ? "badge-error" : "badge-warning"}`}>{p.qty_on_hand <= 0 ? "Out" : `${p.qty_on_hand} left`}</span>
-                  </div>
-                ))
+                  ))}
+
+                  {/* Then show low stock products */}
+                  {data.low_stock?.map((p: any) => (
+                    <div key={p.id} style={{ display: "flex", alignItems: "center", padding: "var(--s3) var(--s4)", borderBottom: "1px solid var(--divider)", gap: "var(--s3)" }}>
+                      <span style={{ fontSize: 20 }}>{p.qty_on_hand === 0 ? "⚪" : "🟡"}</span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 700, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.model}</div>
+                        <div style={{ fontSize: 12, color: "var(--muted)" }}>{p.sku}</div>
+                      </div>
+                      <span className={`badge ${p.qty_on_hand === 0 ? "badge-error" : "badge-warning"}`}>
+                        {p.qty_on_hand === 0 ? "Out of Stock" : `${p.qty_on_hand} left`}
+                      </span>
+                    </div>
+                  ))}
+                </>
               )}
             </div>
           </div>

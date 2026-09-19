@@ -212,7 +212,7 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
     items.forEach((it: any) => {
       const prod = products.find((pr) => pr.id === it.product_id || pr.model === it.model);
       if (prod) {
-        prod.qty_on_hand = Math.max(0, (Number(prod.qty_on_hand) || 0) + multiplier * it.qty);
+        prod.qty_on_hand = (Number(prod.qty_on_hand) || 0) + multiplier * it.qty;
       }
     });
     setStored("products", products);
@@ -237,7 +237,7 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
     (existing.items || []).forEach((it: any) => {
       const prod = products.find((pr) => pr.id === it.product_id || pr.model === it.model);
       if (prod) {
-        prod.qty_on_hand = Math.max(0, (Number(prod.qty_on_hand) || 0) + prevMultiplier * (Number(it.qty) || 0));
+        prod.qty_on_hand = (Number(prod.qty_on_hand) || 0) + prevMultiplier * (Number(it.qty) || 0);
       }
     });
 
@@ -264,7 +264,7 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
     newItems.forEach((it: any) => {
       const prod = products.find((pr) => pr.id === it.product_id || pr.model === it.model);
       if (prod) {
-        prod.qty_on_hand = Math.max(0, (Number(prod.qty_on_hand) || 0) + newMultiplier * it.qty);
+        prod.qty_on_hand = (Number(prod.qty_on_hand) || 0) + newMultiplier * it.qty;
       }
     });
     setStored("products", products);
@@ -334,9 +334,9 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
     if (!prod) throw new Error("Product not found: " + pid);
 
     if (body.new_qty !== undefined && body.new_qty !== null && body.new_qty !== "") {
-      prod.qty_on_hand = Math.max(0, Number(body.new_qty) || 0);
+      prod.qty_on_hand = Number(body.new_qty) || 0;
     } else if (body.qty_delta !== undefined && body.qty_delta !== null) {
-      prod.qty_on_hand = Math.max(0, (Number(prod.qty_on_hand) || 0) + (Number(body.qty_delta) || 0));
+      prod.qty_on_hand = (Number(prod.qty_on_hand) || 0) + (Number(body.qty_delta) || 0);
     }
     setStored("products", products);
     syncProductToFirestore(prod);
@@ -473,7 +473,7 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
         const mult = target.kind === "purchase" ? -1 : 1;
         (target.items || []).forEach((it: any) => {
           const prod = products.find((pr) => pr.id === it.product_id || pr.model === it.model);
-          if (prod) prod.qty_on_hand = Math.max(0, (Number(prod.qty_on_hand) || 0) + mult * (Number(it.qty) || 0));
+          if (prod) prod.qty_on_hand = (Number(prod.qty_on_hand) || 0) + mult * (Number(it.qty) || 0);
         });
         setStored("products", products);
         syncProductsBatchToFirestore(products);
@@ -602,7 +602,8 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
     const units_in_stock = products.reduce((s, p) => s + (p.qty_on_hand || 0), 0);
     const net_profit = total_sales - cogs - total_expenses;
 
-    const low_stock = products.filter((p) => (p.qty_on_hand || 0) <= 2);
+    const low_stock = products.filter((p) => (p.qty_on_hand || 0) >= 0 && (p.qty_on_hand || 0) <= 2);
+    const negative_stock = products.filter((p) => (p.qty_on_hand || 0) < 0);
 
     const recent_sales = sales.slice(0, 5).map((o) => {
       const paid = (o.payments || []).reduce((s: number, pm: any) => s + pm.amount, 0);
@@ -610,6 +611,18 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
       const pay_status = balance <= 0.5 ? "cleared" : paid > 0 ? "partial" : "unpaid";
       return { ...o, paid, balance, pay_status };
     });
+
+    // Available stock details for the dashboard
+    const available_stock = products.map((p) => ({
+      id: p.id,
+      model: p.model,
+      sku: p.sku || "",
+      category: p.category || "Television",
+      qty_on_hand: Number(p.qty_on_hand) || 0,
+      cost_price: Number(p.cost_price) || 0,
+      sell_price: Number(p.sell_price) || 0,
+      status: (Number(p.qty_on_hand) || 0) < 0 ? "negative" : (Number(p.qty_on_hand) || 0) <= 2 ? "low" : "available",
+    }));
 
     const summary = {
       total_sales,
@@ -625,12 +638,133 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
       sales_count: sales.length,
       purchases_count: purchases.length,
       low_stock,
+      negative_stock,
+      available_stock,
       recent_sales,
     };
 
     if (p === "/dashboard") return summary;
 
-    // Reports additions
+    // Reports additions: Dynamic Month Aggregation
+    const getMonthKey = (dateStr?: string) => {
+      try {
+        if (!dateStr) return new Date().toISOString().slice(0, 7);
+        const d = new Date(dateStr);
+        if (!isNaN(d.getTime())) return d.toISOString().slice(0, 7);
+      } catch {}
+      return new Date().toISOString().slice(0, 7);
+    };
+
+    const sales_by_month: Record<string, number> = {};
+    const purchases_by_month: Record<string, number> = {};
+    const sales_units_by_month: Record<string, number> = {};
+    const model_monthly_map: Record<string, Record<string, { qty: number; amount: number }>> = {};
+    const monthly_metrics: Record<string, { month: string; sales: number; purchases: number; cogs: number; gross_profit: number; units: number; top_model?: string }> = {};
+
+    sales.forEach((o) => {
+      const m = getMonthKey(o.date);
+      sales_by_month[m] = Math.round(((sales_by_month[m] || 0) + (Number(o.total) || 0)) * 100) / 100;
+
+      if (!monthly_metrics[m]) {
+        monthly_metrics[m] = { month: m, sales: 0, purchases: 0, cogs: 0, gross_profit: 0, units: 0 };
+      }
+      monthly_metrics[m].sales = Math.round((monthly_metrics[m].sales + (Number(o.total) || 0)) * 100) / 100;
+
+      (o.items || []).forEach((it: any) => {
+        const itQty = Number(it.qty) || 0;
+        const itRate = Number(it.rate) || 0;
+        const itAmt = Number(it.amount) || (itQty * itRate);
+        const itCost = (Number(it.cost) || itRate * 0.9) * itQty;
+
+        sales_units_by_month[m] = (sales_units_by_month[m] || 0) + itQty;
+        monthly_metrics[m].units += itQty;
+        monthly_metrics[m].cogs = Math.round((monthly_metrics[m].cogs + itCost) * 100) / 100;
+
+        const modelName = it.model || "Unknown";
+        if (!model_monthly_map[modelName]) {
+          model_monthly_map[modelName] = {};
+        }
+        if (!model_monthly_map[modelName][m]) {
+          model_monthly_map[modelName][m] = { qty: 0, amount: 0 };
+        }
+        model_monthly_map[modelName][m].qty += itQty;
+        model_monthly_map[modelName][m].amount = Math.round((model_monthly_map[modelName][m].amount + itAmt) * 100) / 100;
+      });
+    });
+
+    purchases.forEach((o) => {
+      const m = getMonthKey(o.date);
+      purchases_by_month[m] = Math.round(((purchases_by_month[m] || 0) + (Number(o.total) || 0)) * 100) / 100;
+
+      if (!monthly_metrics[m]) {
+        monthly_metrics[m] = { month: m, sales: 0, purchases: 0, cogs: 0, gross_profit: 0, units: 0 };
+      }
+      monthly_metrics[m].purchases = Math.round((monthly_metrics[m].purchases + (Number(o.total) || 0)) * 100) / 100;
+    });
+
+    // Compute gross profit and find top model per month
+    Object.keys(monthly_metrics).forEach((m) => {
+      monthly_metrics[m].gross_profit = Math.round((monthly_metrics[m].sales - monthly_metrics[m].cogs) * 100) / 100;
+
+      let topM = "";
+      let topQty = 0;
+      Object.entries(model_monthly_map).forEach(([model, mData]) => {
+        if (mData[m] && mData[m].qty > topQty) {
+          topQty = mData[m].qty;
+          topM = model;
+        }
+      });
+      monthly_metrics[m].top_model = topM || "None";
+    });
+
+    // Sorted months list
+    const monthKeys = Array.from(
+      new Set([...Object.keys(sales_by_month), ...Object.keys(purchases_by_month)])
+    ).filter(Boolean).sort();
+
+    // Model monthly series for line graphs
+    const model_series = Object.entries(model_monthly_map).map(([model, mData]) => {
+      const totalUnits = Object.values(mData).reduce((sum, v) => sum + v.qty, 0);
+      const totalRevenue = Object.values(mData).reduce((sum, v) => sum + v.amount, 0);
+      return {
+        model,
+        monthly_data: mData,
+        total_units: totalUnits,
+        total_revenue: totalRevenue,
+      };
+    }).sort((a, b) => b.total_units - a.total_units);
+
+    // Month-over-Month Comparison
+    const monthly_breakdown = monthKeys.map((m) => monthly_metrics[m] || {
+      month: m,
+      sales: sales_by_month[m] || 0,
+      purchases: purchases_by_month[m] || 0,
+      cogs: 0,
+      gross_profit: 0,
+      units: sales_units_by_month[m] || 0,
+      top_model: "None",
+    });
+
+    let mom_comparison = null;
+    if (monthly_breakdown.length >= 2) {
+      const current = monthly_breakdown[monthly_breakdown.length - 1];
+      const previous = monthly_breakdown[monthly_breakdown.length - 2];
+      const salesGrowth = previous.sales > 0 ? ((current.sales - previous.sales) / previous.sales) * 100 : current.sales > 0 ? 100 : 0;
+      const unitsGrowth = previous.units > 0 ? ((current.units - previous.units) / previous.units) * 100 : current.units > 0 ? 100 : 0;
+      mom_comparison = {
+        current_month: current.month,
+        previous_month: previous.month,
+        current_sales: current.sales,
+        previous_sales: previous.sales,
+        sales_growth_pct: Math.round(salesGrowth * 10) / 10,
+        current_units: current.units,
+        previous_units: previous.units,
+        units_growth_pct: Math.round(unitsGrowth * 10) / 10,
+        current_profit: current.gross_profit,
+        previous_profit: previous.gross_profit,
+      };
+    }
+
     const exp_cat: Record<string, number> = {};
     expenses.forEach((e) => {
       exp_cat[e.category] = (exp_cat[e.category] || 0) + e.amount;
@@ -646,8 +780,13 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
 
     return {
       summary,
-      sales_by_month: { "2026-08": 0, "2026-09": total_sales },
-      purchases_by_month: { "2026-08": total_purchases, "2026-09": 0 },
+      sales_by_month,
+      purchases_by_month,
+      sales_units_by_month,
+      month_keys: monthKeys,
+      model_series,
+      monthly_breakdown,
+      mom_comparison,
       top_products,
       expense_by_category: exp_cat,
       overdue_receivables: sales

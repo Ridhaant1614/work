@@ -29,7 +29,7 @@ export default function Inventory() {
   const qc = useQueryClient();
 
   const [query, setQuery] = useState("");
-  const [stockFilter, setStockFilter] = useState<"all" | "in_stock" | "low_stock" | "out">("all");
+  const [stockFilter, setStockFilter] = useState<"all" | "in_stock" | "low_stock" | "out" | "negative">("all");
 
   // Modals state
   const [openAdd, setOpenAdd] = useState(false);
@@ -99,7 +99,7 @@ export default function Inventory() {
     mutationFn: () => {
       if (!adjustItem) return Promise.reject(new Error("No item selected"));
       return apiPost(`/products/${adjustItem.id}/adjust-stock`, {
-        new_qty: Math.max(0, adjustItem.new_qty),
+        new_qty: adjustItem.new_qty,
         reason: adjustItem.reason.trim(),
       });
     },
@@ -124,18 +124,21 @@ export default function Inventory() {
   });
 
   const totalUnits = data.reduce((a: number, p: any) => a + (Number(p.qty_on_hand) || 0), 0);
-  const totalValue = data.reduce((a: number, p: any) => a + (Number(p.qty_on_hand) || 0) * (Number(p.cost_price) || 0), 0);
-  const lowStockCount = data.filter((p: any) => (Number(p.qty_on_hand) || 0) > 0 && (Number(p.qty_on_hand) || 0) <= 2).length;
-  const outOfStockCount = data.filter((p: any) => (Number(p.qty_on_hand) || 0) <= 0).length;
+  const totalValue = data.reduce((a: number, p: any) => a + Math.max(0, Number(p.qty_on_hand) || 0) * (Number(p.cost_price) || 0), 0);
+  const lowStockCount = data.filter((p: any) => (Number(p.qty_on_hand) || 0) >= 0 && (Number(p.qty_on_hand) || 0) <= 2).length;
+  const outOfStockCount = data.filter((p: any) => (Number(p.qty_on_hand) || 0) === 0).length;
+  const negativeStockCount = data.filter((p: any) => (Number(p.qty_on_hand) || 0) < 0).length;
 
   const filtered = useMemo(() => {
     let list = data;
     if (stockFilter === "in_stock") {
       list = list.filter((p: any) => (Number(p.qty_on_hand) || 0) > 2);
     } else if (stockFilter === "low_stock") {
-      list = list.filter((p: any) => (Number(p.qty_on_hand) || 0) > 0 && (Number(p.qty_on_hand) || 0) <= 2);
+      list = list.filter((p: any) => (Number(p.qty_on_hand) || 0) >= 0 && (Number(p.qty_on_hand) || 0) <= 2);
     } else if (stockFilter === "out") {
-      list = list.filter((p: any) => (Number(p.qty_on_hand) || 0) <= 0);
+      list = list.filter((p: any) => (Number(p.qty_on_hand) || 0) === 0);
+    } else if (stockFilter === "negative") {
+      list = list.filter((p: any) => (Number(p.qty_on_hand) || 0) < 0);
     }
 
     if (!query.trim()) return list;
@@ -221,10 +224,15 @@ export default function Inventory() {
             <div className="kpi-value" style={{ color: "var(--warning)" }}>{lowStockCount}</div>
             <div className="kpi-label">Low Stock (≤ 2 units)</div>
           </div>
+          <div className="kpi-card" style={negativeStockCount > 0 ? { border: "1px solid var(--error)", background: "rgba(239, 68, 68, 0.04)" } : {}}>
+            <div className="kpi-icon" style={{ background: "rgba(239, 68, 68, 0.12)", color: "var(--error)" }}>🔴</div>
+            <div className="kpi-value" style={{ color: "var(--error)" }}>{negativeStockCount}</div>
+            <div className="kpi-label">Deficit (Awaiting Lot)</div>
+          </div>
           <div className="kpi-card">
-            <div className="kpi-icon" style={{ background: "rgba(239, 68, 68, 0.12)", color: "var(--error)" }}>🚫</div>
-            <div className="kpi-value" style={{ color: "var(--error)" }}>{outOfStockCount}</div>
-            <div className="kpi-label">Out of Stock</div>
+            <div className="kpi-icon" style={{ background: "rgba(100, 116, 139, 0.12)", color: "var(--muted)" }}>🚫</div>
+            <div className="kpi-value" style={{ color: "var(--on-surface-2)" }}>{outOfStockCount}</div>
+            <div className="kpi-label">Out of Stock (0 units)</div>
           </div>
         </div>
 
@@ -240,7 +248,7 @@ export default function Inventory() {
               onChange={(e) => setQuery(e.target.value)}
             />
           </div>
-          <div className="chip-bar">
+          <div className="chip-bar" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             <button
               className={`chip${stockFilter === "all" ? " active" : ""}`}
               onClick={() => setStockFilter("all")}
@@ -251,7 +259,7 @@ export default function Inventory() {
               className={`chip${stockFilter === "in_stock" ? " active" : ""}`}
               onClick={() => setStockFilter("in_stock")}
             >
-              In Stock ({data.length - lowStockCount - outOfStockCount})
+              In Stock ({data.filter((p: any) => (Number(p.qty_on_hand) || 0) > 2).length})
             </button>
             <button
               className={`chip${stockFilter === "low_stock" ? " active" : ""}`}
@@ -259,6 +267,15 @@ export default function Inventory() {
             >
               Low Stock ({lowStockCount})
             </button>
+            {negativeStockCount > 0 && (
+              <button
+                className={`chip${stockFilter === "negative" ? " active" : ""}`}
+                style={stockFilter === "negative" ? { background: "var(--error)", color: "#fff", borderColor: "var(--error)" } : { color: "var(--error)", borderColor: "var(--error)" }}
+                onClick={() => setStockFilter("negative")}
+              >
+                🔴 Deficit / Awaiting Lot ({negativeStockCount})
+              </button>
+            )}
             <button
               className={`chip${stockFilter === "out" ? " active" : ""}`}
               onClick={() => setStockFilter("out")}
@@ -291,11 +308,11 @@ export default function Inventory() {
               <thead>
                 <tr>
                   <th>Model</th>
-                  <th>SKU</th>
-                  <th>Category</th>
-                  <th style={{ textAlign: "right" }}>Cost Price</th>
-                  <th style={{ textAlign: "right" }}>Sell Price</th>
-                  <th style={{ textAlign: "right" }}>Margin</th>
+                  <th className="hide-mobile">SKU</th>
+                  <th className="hide-mobile">Category</th>
+                  <th className="hide-mobile" style={{ textAlign: "right" }}>Cost Price</th>
+                  <th className="hide-mobile" style={{ textAlign: "right" }}>Sell Price</th>
+                  <th className="hide-mobile" style={{ textAlign: "right" }}>Margin</th>
                   <th style={{ textAlign: "right" }}>Stock</th>
                   <th>Status</th>
                   <th style={{ textAlign: "right" }}>Actions</th>
@@ -307,34 +324,47 @@ export default function Inventory() {
                   const cost = Number(p.cost_price) || 0;
                   const sell = Number(p.sell_price) || 0;
                   const margin = sell && cost ? (((sell - cost) / cost) * 100).toFixed(1) : "—";
-                  const low = qty > 0 && qty <= 2;
-                  const out = qty <= 0;
+                  const isNegative = qty < 0;
+                  const low = qty >= 0 && qty <= 2;
+                  const isZero = qty === 0;
 
                   return (
-                    <tr key={p.id} className="clickable" onClick={() => handleOpenEdit(p)}>
+                    <tr
+                      key={p.id}
+                      className="clickable"
+                      onClick={() => handleOpenEdit(p)}
+                      style={isNegative ? { background: "rgba(239, 68, 68, 0.05)" } : undefined}
+                    >
                       <td>
                         <div style={{ fontWeight: 700 }}>{p.model}</div>
+                        <div className="show-mobile" style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+                          {p.sku ? `${p.sku} · ` : ""}{formatINR(sell)}
+                        </div>
                       </td>
-                      <td>
+                      <td className="hide-mobile">
                         <span className="badge" style={{ background: "var(--surface-2)", color: "var(--on-surface)", fontSize: 12 }}>
                           {p.sku || "—"}
                         </span>
                       </td>
-                      <td style={{ color: "var(--muted)", fontSize: 13 }}>{p.category || "Television"}</td>
-                      <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{formatINR(cost)}</td>
-                      <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{formatINR(sell)}</td>
-                      <td style={{ textAlign: "right", color: "var(--success)", fontWeight: 600 }}>{margin}%</td>
+                      <td className="hide-mobile" style={{ color: "var(--muted)", fontSize: 13 }}>{p.category || "Television"}</td>
+                      <td className="hide-mobile" style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{formatINR(cost)}</td>
+                      <td className="hide-mobile" style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{formatINR(sell)}</td>
+                      <td className="hide-mobile" style={{ textAlign: "right", color: "var(--success)", fontWeight: 600 }}>{margin}%</td>
                       <td style={{
                         textAlign: "right",
                         fontWeight: 800,
                         fontSize: 16,
                         fontVariantNumeric: "tabular-nums",
-                        color: out ? "var(--error)" : low ? "var(--warning)" : "var(--brand)",
+                        color: isNegative ? "var(--error)" : isZero ? "var(--muted)" : low ? "var(--warning)" : "var(--brand)",
                       }}>
                         {qty}
                       </td>
                       <td>
-                        {out ? (
+                        {isNegative ? (
+                          <span className="badge badge-error" style={{ fontWeight: 700 }}>
+                            🔴 {qty} (Awaiting Lot)
+                          </span>
+                        ) : isZero ? (
                           <span className="badge badge-error">Out of Stock</span>
                         ) : low ? (
                           <span className="badge badge-warning">Low ({qty})</span>
@@ -530,7 +560,6 @@ export default function Inventory() {
                 <input
                   className="input"
                   type="number"
-                  min={0}
                   value={editProduct.qty_on_hand}
                   onChange={(e) => setEditProduct({ ...editProduct, qty_on_hand: e.target.value })}
                 />
@@ -585,7 +614,7 @@ export default function Inventory() {
                       type="button"
                       className="btn btn-outline btn-sm"
                       style={{ flex: 1, minWidth: 50, fontWeight: 700 }}
-                      onClick={() => setAdjustItem({ ...adjustItem, new_qty: Math.max(0, adjustItem.new_qty + delta) })}
+                      onClick={() => setAdjustItem({ ...adjustItem, new_qty: adjustItem.new_qty + delta })}
                     >
                       {delta > 0 ? `+${delta}` : delta}
                     </button>
@@ -598,9 +627,8 @@ export default function Inventory() {
                 <input
                   className="input"
                   type="number"
-                  min={0}
                   value={adjustItem.new_qty}
-                  onChange={(e) => setAdjustItem({ ...adjustItem, new_qty: Math.max(0, parseInt(e.target.value) || 0) })}
+                  onChange={(e) => setAdjustItem({ ...adjustItem, new_qty: parseInt(e.target.value) || 0 })}
                 />
               </div>
 

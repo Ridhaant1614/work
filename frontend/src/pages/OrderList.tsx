@@ -178,31 +178,37 @@ export default function OrderList({ kind, title }: OrderListProps) {
               <thead>
                 <tr>
                   <th>{partyLabel}</th>
-                  <th>Ref No.</th>
-                  <th>Date</th>
+                  <th className="hide-mobile">Ref No.</th>
+                  <th className="hide-mobile">Date</th>
                   <th style={{ textAlign: "right" }}>Total</th>
-                  <th style={{ textAlign: "right" }}>Paid</th>
-                  <th style={{ textAlign: "right" }}>Balance</th>
+                  <th className="hide-mobile" style={{ textAlign: "right" }}>Paid</th>
+                  <th className="hide-mobile" style={{ textAlign: "right" }}>Balance</th>
                   <th>Status</th>
-                  <th>Age</th>
+                  <th className="hide-mobile">Age</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.map((o: any) => (
                   <tr key={o.id} className="clickable" onClick={() => navigate(`${detailBase}/${o.id}`)}>
-                    <td><span style={{ fontWeight: 700 }}>{o.party_name}</span></td>
-                    <td style={{ color: "var(--muted)", fontSize: 13 }}>{o.ref_no || "—"}</td>
-                    <td style={{ color: "var(--muted)", fontSize: 13 }}>{shortDate(o.date)}</td>
+                    <td>
+                      <div style={{ fontWeight: 700 }}>{o.party_name}</div>
+                      <div className="show-mobile" style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+                        {o.ref_no ? `${o.ref_no} · ` : ""}{shortDate(o.date)}
+                        {o.balance > 0 && <span style={{ color: "var(--error)", marginLeft: 6, fontWeight: 600 }}>Bal: {formatINR(o.balance)}</span>}
+                      </div>
+                    </td>
+                    <td className="hide-mobile" style={{ color: "var(--muted)", fontSize: 13 }}>{o.ref_no || "—"}</td>
+                    <td className="hide-mobile" style={{ color: "var(--muted)", fontSize: 13 }}>{shortDate(o.date)}</td>
                     <td style={{ textAlign: "right", fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{formatINR(o.total)}</td>
-                    <td style={{ textAlign: "right", color: "var(--success)", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{formatINR(o.amount_paid)}</td>
-                    <td style={{ textAlign: "right", color: o.balance > 0 ? "var(--error)" : "var(--muted)", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{formatINR(o.balance)}</td>
+                    <td className="hide-mobile" style={{ textAlign: "right", color: "var(--success)", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{formatINR(o.amount_paid)}</td>
+                    <td className="hide-mobile" style={{ textAlign: "right", color: o.balance > 0 ? "var(--error)" : "var(--muted)", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{formatINR(o.balance)}</td>
                     <td onClick={e => { e.stopPropagation(); openQuickStatus(o); }}>
                       <span title="Click to change payment status" style={{ cursor: "pointer" }}>
                         <PayBadge status={o.pay_status} />
                       </span>
                     </td>
-                    <td style={{ color: "var(--muted)", fontSize: 13 }}>{o.age_days > 0 ? `${o.age_days}d` : "—"}</td>
+                    <td className="hide-mobile" style={{ color: "var(--muted)", fontSize: 13 }}>{o.age_days > 0 ? `${o.age_days}d` : "—"}</td>
                     <td onClick={e => e.stopPropagation()} style={{ whiteSpace: "nowrap" }}>
                       <button
                         className="btn btn-ghost btn-icon btn-sm"

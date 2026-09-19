@@ -273,9 +273,9 @@ async def adjust_product_stock(pid: str, body: StockAdjustIn, user=Depends(curre
     if not prod:
         raise HTTPException(404, "Product not found")
     if body.new_qty is not None:
-        new_stock = max(0.0, float(body.new_qty))
+        new_stock = float(body.new_qty)
     elif body.qty_delta is not None:
-        new_stock = max(0.0, float(prod.get("qty_on_hand", 0)) + float(body.qty_delta))
+        new_stock = float(prod.get("qty_on_hand", 0)) + float(body.qty_delta)
     else:
         raise HTTPException(400, "Must provide qty_delta or new_qty")
     r = await db.products.find_one_and_update({"id": pid}, {"$set": {"qty_on_hand": new_stock}}, return_document=True)

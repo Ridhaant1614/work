@@ -9,7 +9,6 @@ const NAV = [
   { to: "/", icon: "⬡", label: "Dashboard", end: true },
 
   { label: "BUSINESS", group: "BUSINESS" },
-  { to: "/billing", icon: "⚡", label: "Billing & POS" },
   { to: "/sales", icon: "🧾", label: "Sales" },
   { to: "/purchases", icon: "📦", label: "Purchases" },
   { to: "/expenses", icon: "💳", label: "Expenses" },
@@ -20,7 +19,7 @@ const NAV = [
   { to: "/dealers", icon: "🏪", label: "Dealers" },
 
   { label: "INSIGHTS", group: "INSIGHTS" },
-  { to: "/reports", icon: "📈", label: "Reports" },
+  { to: "/reports", icon: "📈", label: "Analytics & Reports" },
   { to: "/staff", icon: "👥", label: "Staff", ownerOnly: true },
 ];
 
@@ -45,10 +44,18 @@ export default function Layout() {
     <>
       <div className="sidebar-logo">
         <div className="sidebar-logo-mark">SE</div>
-        <div>
+        <div style={{ flex: 1 }}>
           <div className="sidebar-logo-text">Soneja Electronics</div>
           <div className="sidebar-logo-sub">Distribution CRM</div>
         </div>
+        <button
+          className="sidebar-close-btn"
+          onClick={() => setSidebarOpen(false)}
+          aria-label="Close sidebar"
+          title="Close navigation"
+        >
+          ✕
+        </button>
       </div>
       <nav className="sidebar-nav">
         {items.map((item, i) => {
@@ -103,9 +110,16 @@ export default function Layout() {
       <div className="main-area">
         {/* Mobile topbar */}
         <div className="mobile-topbar">
-          <button className="hamburger" onClick={() => setSidebarOpen(o => !o)}>☰</button>
-          <div className="sidebar-logo-text" style={{ flex: 1 }}>Soneja Electronics</div>
-          <div style={{ marginRight: 8 }}>
+          <button
+            className="hamburger"
+            onClick={() => setSidebarOpen(o => !o)}
+            aria-label="Toggle navigation menu"
+            title="Navigation Menu"
+          >
+            ☰
+          </button>
+          <div className="sidebar-logo-text truncate" style={{ flex: 1, fontSize: 15 }}>Soneja Electronics</div>
+          <div style={{ marginRight: 6 }}>
             <CloudSyncBadge onOpenModal={() => setShowCloudSyncModal(true)} />
           </div>
           <div className="avatar-initials" style={{ width: 32, height: 32, fontSize: 12 }}>{initials}</div>
@@ -125,8 +139,8 @@ export default function Layout() {
           <div className="mobile-nav-items">
             {[
               { to: "/", icon: "⬡", label: "Home" },
-              { to: "/billing", icon: "⚡", label: "Billing" },
               { to: "/sales", icon: "🧾", label: "Sales" },
+              { to: "/purchases", icon: "📦", label: "Purchases" },
               { to: "/inventory", icon: "📊", label: "Stock" },
               { to: "/reports", icon: "📈", label: "Reports" },
             ].map(it => (
