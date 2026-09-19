@@ -778,6 +778,79 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
     });
     const top_products = Object.entries(prod_qty).map(([model, qty]) => ({ model, qty }));
 
+    // Top Wholesale Dealers Performance Leaderboard
+    const dealer_map: Record<string, { party_name: string; party_id: string | null; orders_count: number; total_revenue: number; total_units: number; amount_paid: number; balance: number }> = {};
+    sales.forEach((o) => {
+      const pName = o.party_name || "Unknown Dealer";
+      const pId = o.party_id || pName;
+      if (!dealer_map[pId]) {
+        dealer_map[pId] = {
+          party_name: pName,
+          party_id: o.party_id || null,
+          orders_count: 0,
+          total_revenue: 0,
+          total_units: 0,
+          amount_paid: 0,
+          balance: 0,
+        };
+      }
+      dealer_map[pId].orders_count += 1;
+      dealer_map[pId].total_revenue = Math.round((dealer_map[pId].total_revenue + (Number(o.total) || 0)) * 100) / 100;
+      const paid = (o.payments || []).reduce((s: number, p: any) => s + (Number(p.amount) || 0), 0);
+      dealer_map[pId].amount_paid = Math.round((dealer_map[pId].amount_paid + paid) * 100) / 100;
+      const bal = Math.max(0, (Number(o.total) || 0) - paid);
+      dealer_map[pId].balance = Math.round((dealer_map[pId].balance + bal) * 100) / 100;
+      (o.items || []).forEach((it: any) => {
+        dealer_map[pId].total_units += (Number(it.qty) || 0);
+      });
+    });
+    const top_dealers = Object.values(dealer_map).sort((a, b) => b.total_revenue - a.total_revenue);
+
+    // Screen Size & Category Market Share Breakdown
+    const cat_map: Record<string, { category: string; units: number; revenue: number; share_pct: number }> = {};
+    let totalSalesUnits = 0;
+    let totalSalesRevenue = 0;
+    sales.forEach((o) => {
+      (o.items || []).forEach((it: any) => {
+        const model = it.model || "";
+        let cat = "Other TV";
+        if (/32\b/i.test(model)) cat = '32" HD/Smart';
+        else if (/43\b/i.test(model)) cat = '43" FHD/4K Smart';
+        else if (/50\b/i.test(model)) cat = '50" 4K Smart';
+        else if (/55\b/i.test(model)) cat = '55" 4K UHD';
+        else if (/58\b/i.test(model)) cat = '58" 4K QLED';
+        else if (/65\b/i.test(model)) cat = '65" 4K QLED/WebOS';
+        else if (/75\b/i.test(model)) cat = '75" Ultra Premium';
+
+        const qty = Number(it.qty) || 0;
+        const amt = Number(it.amount) || (qty * (Number(it.rate) || 0));
+        totalSalesUnits += qty;
+        totalSalesRevenue += amt;
+
+        if (!cat_map[cat]) {
+          cat_map[cat] = { category: cat, units: 0, revenue: 0, share_pct: 0 };
+        }
+        cat_map[cat].units += qty;
+        cat_map[cat].revenue = Math.round((cat_map[cat].revenue + amt) * 100) / 100;
+      });
+    });
+    const category_breakdown = Object.values(cat_map).map((c) => ({
+      ...c,
+      share_pct: totalSalesRevenue > 0 ? Math.round((c.revenue / totalSalesRevenue) * 1000) / 10 : 0,
+    })).sort((a, b) => b.revenue - a.revenue);
+
+    // Executive Distribution KPIs
+    const totalPaid = sales.reduce((acc, o) => acc + (o.payments || []).reduce((s: number, p: any) => s + (Number(p.amount) || 0), 0), 0);
+    const sortedByRevenue = [...model_series].sort((a, b) => b.total_revenue - a.total_revenue);
+    const executive_kpis = {
+      top_model_by_volume: model_series[0] ? { model: model_series[0].model, units: model_series[0].total_units } : null,
+      top_model_by_revenue: sortedByRevenue[0] ? { model: sortedByRevenue[0].model, revenue: sortedByRevenue[0].total_revenue } : null,
+      avg_order_value: sales.length > 0 ? Math.round((totalSalesRevenue / sales.length) * 100) / 100 : 0,
+      collection_rate: totalSalesRevenue > 0 ? Math.round((totalPaid / totalSalesRevenue) * 1000) / 10 : 0,
+      total_sales_units: totalSalesUnits,
+      total_collected: Math.round(totalPaid * 100) / 100,
+    };
+
     return {
       summary,
       sales_by_month,
@@ -788,6 +861,9 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
       monthly_breakdown,
       mom_comparison,
       top_products,
+      top_dealers,
+      category_breakdown,
+      executive_kpis,
       expense_by_category: exp_cat,
       overdue_receivables: sales
         .filter((o) => o.total - (o.payments || []).reduce((s: number, p: any) => s + p.amount, 0) > 0.5)

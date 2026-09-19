@@ -21,6 +21,7 @@ const PALETTE = [
 export default function Reports() {
   const navigate = useNavigate();
   const [chartMetric, setChartMetric] = useState<"units" | "revenue">("units");
+  const [timeRange, setTimeRange] = useState<"all" | "6m" | "3m" | "1m">("all");
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const [hoveredPoint, setHoveredPoint] = useState<{
     x: number;
@@ -43,6 +44,9 @@ export default function Reports() {
   const modelSeries: any[] = data?.model_series || [];
   const monthlyBreakdown: any[] = data?.monthly_breakdown || [];
   const momComparison = data?.mom_comparison || null;
+  const topDealers: any[] = data?.top_dealers || [];
+  const categoryBreakdown: any[] = data?.category_breakdown || [];
+  const executiveKpis = data?.executive_kpis || null;
   const expenseByCategory: Record<string, number> = data?.expense_by_category || {};
   const overdueReceivables: any[] = data?.overdue_receivables || [];
   const overduePayables: any[] = data?.overdue_payables || [];
@@ -56,6 +60,18 @@ export default function Reports() {
     const arr = Array.from(set).filter((m) => m && m !== "unknown").sort();
     return arr.length > 0 ? arr : [new Date().toISOString().slice(0, 7)];
   }, [data?.month_keys, salesByMonth, purchasesByMonth]);
+
+  // Filtered months according to active time range
+  const filteredMonths = useMemo(() => {
+    if (timeRange === "1m") return allMonths.slice(-1);
+    if (timeRange === "3m") return allMonths.slice(-3);
+    if (timeRange === "6m") return allMonths.slice(-6);
+    return allMonths;
+  }, [allMonths, timeRange]);
+
+  const filteredMonthlyBreakdown = useMemo(() => {
+    return monthlyBreakdown.filter((mb: any) => filteredMonths.includes(mb.month));
+  }, [monthlyBreakdown, filteredMonths]);
 
   // Set default selected models once loaded
   React.useEffect(() => {
@@ -100,11 +116,11 @@ export default function Reports() {
   const plotWidth = svgWidth - padding.left - padding.right;
   const plotHeight = svgHeight - padding.top - padding.bottom;
 
-  // Active series for the chart based on selected metric
+  // Active series for the chart based on selected metric and filtered months
   const activeSeriesList = selectedModels.map((modelName, idx) => {
     const found = modelSeries.find((s: any) => s.model === modelName);
     const color = PALETTE[idx % PALETTE.length];
-    const points = allMonths.map((m: string) => {
+    const points = filteredMonths.map((m: string) => {
       if (chartMetric === "units") {
         return found?.monthly_data?.[m]?.qty || 0;
       }
@@ -122,8 +138,8 @@ export default function Reports() {
   const maxY = Math.max(...allYValues, chartMetric === "units" ? 5 : 10000);
 
   const getX = (index: number) => {
-    if (allMonths.length <= 1) return padding.left + plotWidth / 2;
-    return padding.left + (index / (allMonths.length - 1)) * plotWidth;
+    if (filteredMonths.length <= 1) return padding.left + plotWidth / 2;
+    return padding.left + (index / (filteredMonths.length - 1)) * plotWidth;
   };
 
   const getY = (val: number) => {
@@ -147,20 +163,157 @@ export default function Reports() {
     setSelectedModels(modelSeries.slice(0, 4).map((m: any) => m.model));
   }
 
+  function downloadCSV(filename: string, rows: (string | number)[][]) {
+    const csvContent = "data:text/csv;charset=utf-8," + rows.map(e => e.join(",")).join("\n");
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", filename);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+
+  function exportMonthlyLedgerCSV() {
+    const headers = ["Month", "Sales Revenue (INR)", "Units Sold", "Purchases PO (INR)", "COGS (INR)", "Gross Profit (INR)", "Margin Pct", "Top Selling Model"];
+    const rows = filteredMonthlyBreakdown.map((mb: any) => [
+      mb.month,
+      mb.sales,
+      mb.units,
+      mb.purchases,
+      mb.cogs,
+      mb.gross_profit,
+      mb.sales > 0 ? ((mb.gross_profit / mb.sales) * 100).toFixed(1) + "%" : "0.0%",
+      `"${(mb.top_model || '').replace(/"/g, '""')}"`
+    ]);
+    downloadCSV("Soneja_Monthly_Ledger.csv", [headers, ...rows]);
+  }
+
+  function exportModelMatrixCSV() {
+    const headers = ["TV Model", ...filteredMonths, "Total Units", "Total Revenue (INR)"];
+    const rows = modelSeries.map((ms: any) => [
+      `"${(ms.model || '').replace(/"/g, '""')}"`,
+      ...filteredMonths.map((m: string) => ms.monthly_data?.[m]?.qty || 0),
+      ms.total_units,
+      ms.total_revenue
+    ]);
+    downloadCSV("Soneja_Model_Sales_Matrix.csv", [headers, ...rows]);
+  }
+
   return (
     <div>
       <div className="page-header">
         <div>
           <h1>Analytics & Financial Reports</h1>
-          <p>Monthly sales trends, model sales comparisons, and distribution performance</p>
+          <p>Monthly sales trends, model sales comparisons, dealer performance &amp; financial analytics</p>
         </div>
-        <div className="page-header-actions">
+        <div className="page-header-actions" style={{ display: "flex", gap: "var(--s2)", flexWrap: "wrap", alignItems: "center" }}>
           <button className="btn btn-outline btn-sm" onClick={() => window.print()}>🖨️ Print Report</button>
           <button className="btn btn-outline btn-sm" onClick={() => refetch()}>↻ Refresh</button>
         </div>
       </div>
 
       <div className="page-body" style={{ display: "flex", flexDirection: "column", gap: "var(--s6)" }}>
+
+        {/* TIME-RANGE SELECTOR BAR */}
+        <div
+          className="card"
+          style={{
+            padding: "var(--s3) var(--s4)",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            flexWrap: "wrap",
+            gap: "var(--s3)",
+            background: "var(--surface)",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--s2)" }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: "var(--muted)" }}>⏱️ Time Horizon:</span>
+            <div style={{ display: "flex", background: "var(--surface-2)", borderRadius: "var(--r-md)", padding: 3, gap: 2 }}>
+              {(
+                [
+                  { key: "all", label: "All Time" },
+                  { key: "6m", label: "Last 6 Months" },
+                  { key: "3m", label: "Last 3 Months" },
+                  { key: "1m", label: "Current Month" },
+                ] as const
+              ).map((t) => (
+                <button
+                  key={t.key}
+                  type="button"
+                  className={`btn btn-xs ${timeRange === t.key ? "btn-primary" : "btn-ghost"}`}
+                  style={{ borderRadius: "var(--r-sm)", fontWeight: 600 }}
+                  onClick={() => setTimeRange(t.key)}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: "var(--s2)", alignItems: "center", flexWrap: "wrap" }}>
+            <button className="btn btn-outline btn-xs" onClick={exportMonthlyLedgerCSV}>
+              📥 Export Ledger CSV
+            </button>
+            <button className="btn btn-outline btn-xs" onClick={exportModelMatrixCSV}>
+              📥 Export Matrix CSV
+            </button>
+          </div>
+        </div>
+
+        {/* EXECUTIVE DISTRIBUTION HIGHLIGHTS */}
+        {executiveKpis && (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "var(--s4)" }}>
+            <div className="card" style={{ padding: "var(--s4)", borderLeft: "4px solid var(--brand)" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--muted)", letterSpacing: "0.5px" }}>
+                🏆 Top Model By Volume
+              </div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: "var(--brand)", marginTop: 4 }}>
+                {executiveKpis.top_model_by_volume ? executiveKpis.top_model_by_volume.model : "—"}
+              </div>
+              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+                {executiveKpis.top_model_by_volume ? `${executiveKpis.top_model_by_volume.units} units sold` : "No sales yet"}
+              </div>
+            </div>
+
+            <div className="card" style={{ padding: "var(--s4)", borderLeft: "4px solid var(--success)" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--muted)", letterSpacing: "0.5px" }}>
+                💎 Highest Grossing Model
+              </div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: "var(--success)", marginTop: 4 }}>
+                {executiveKpis.top_model_by_revenue ? executiveKpis.top_model_by_revenue.model : "—"}
+              </div>
+              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+                {executiveKpis.top_model_by_revenue ? formatINR(executiveKpis.top_model_by_revenue.revenue) : "₹0"} in gross revenue
+              </div>
+            </div>
+
+            <div className="card" style={{ padding: "var(--s4)", borderLeft: "4px solid var(--warning)" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--muted)", letterSpacing: "0.5px" }}>
+                💳 Average Invoice Value (AOV)
+              </div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: "var(--warning)", marginTop: 4 }}>
+                {formatINR(executiveKpis.avg_order_value)}
+              </div>
+              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+                Across {summary.sales_count || 0} wholesale dealer dispatches
+              </div>
+            </div>
+
+            <div className="card" style={{ padding: "var(--s4)", borderLeft: "4px solid #8b5cf6" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--muted)", letterSpacing: "0.5px" }}>
+                📈 Cash Collection Efficiency
+              </div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: "#8b5cf6", marginTop: 4 }}>
+                {executiveKpis.collection_rate}%
+              </div>
+              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+                {formatINR(executiveKpis.total_collected)} collected of {formatINR(totalSales)}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* 1. MONTH-OVER-MONTH (MoM) COMPARISON CARDS */}
         {momComparison ? (
@@ -313,7 +466,7 @@ export default function Reports() {
 
           {/* SVG Line Graph Container */}
           <div style={{ padding: "var(--s4)", overflowX: "auto", position: "relative" }}>
-            {allMonths.length === 0 || activeSeriesList.length === 0 ? (
+            {filteredMonths.length === 0 || activeSeriesList.length === 0 ? (
               <p style={{ color: "var(--muted)", fontSize: 14, textAlign: "center", padding: "var(--s6)" }}>
                 No sales data available to chart. Record sales orders to view trends.
               </p>
@@ -354,7 +507,7 @@ export default function Reports() {
                   })}
 
                   {/* X Axis Month Labels */}
-                  {allMonths.map((m: string, idx: number) => {
+                  {filteredMonths.map((m: string, idx: number) => {
                     const x = getX(idx);
                     return (
                       <g key={m}>
@@ -404,7 +557,7 @@ export default function Reports() {
                         {series.points.map((val: number, idx: number) => {
                           const cx = getX(idx);
                           const cy = getY(val);
-                          const monthLabel = allMonths[idx];
+                          const monthLabel = filteredMonths[idx];
                           const formattedVal =
                             chartMetric === "units"
                               ? `${val} units`
@@ -483,11 +636,14 @@ export default function Reports() {
 
         {/* 3. EVERY MONTH SALES BREAKDOWN TABLE */}
         <div className="card">
-          <div className="card-header">
+          <div className="card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "var(--s3)" }}>
             <div>
               <h2 style={{ fontSize: 15, fontWeight: 700 }}>📅 Every Month Sales & Operational Ledger</h2>
               <p style={{ color: "var(--muted)", fontSize: 13 }}>Chronological breakdown of sales, purchase volumes, and gross profit by month</p>
             </div>
+            <button className="btn btn-outline btn-xs" onClick={exportMonthlyLedgerCSV}>
+              📥 Export CSV
+            </button>
           </div>
           <div className="table-wrap">
             <table className="table">
@@ -504,14 +660,14 @@ export default function Reports() {
                 </tr>
               </thead>
               <tbody>
-                {monthlyBreakdown.length === 0 ? (
+                {filteredMonthlyBreakdown.length === 0 ? (
                   <tr>
                     <td colSpan={8} style={{ textAlign: "center", color: "var(--muted)", padding: "var(--s5)" }}>
-                      No monthly transactions recorded yet.
+                      No monthly transactions found for selected period.
                     </td>
                   </tr>
                 ) : (
-                  monthlyBreakdown.map((mb: any) => {
+                  filteredMonthlyBreakdown.map((mb: any) => {
                     const marginPct = mb.sales > 0 ? ((mb.gross_profit / mb.sales) * 100).toFixed(1) : "0.0";
                     return (
                       <tr key={mb.month}>
@@ -540,20 +696,23 @@ export default function Reports() {
           </div>
         </div>
 
-        {/* 4. MODEL SALES BREAKDOWN MATRIX (Which model was sold and how much each month) */}
+        {/* 4. MODEL SALES BREAKDOWN MATRIX */}
         <div className="card">
-          <div className="card-header">
+          <div className="card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "var(--s3)" }}>
             <div>
               <h2 style={{ fontSize: 15, fontWeight: 700 }}>🏷️ Model-by-Month Sales Breakdown</h2>
               <p style={{ color: "var(--muted)", fontSize: 13 }}>Complete matrix of units sold per TV model across each month</p>
             </div>
+            <button className="btn btn-outline btn-xs" onClick={exportModelMatrixCSV}>
+              📥 Export CSV
+            </button>
           </div>
           <div className="table-wrap">
             <table className="table">
               <thead>
                 <tr>
                   <th>TV Model</th>
-                  {allMonths.map((m: string) => (
+                  {filteredMonths.map((m: string) => (
                     <th key={m} style={{ textAlign: "center" }}>{m}</th>
                   ))}
                   <th style={{ textAlign: "right" }}>Total Units</th>
@@ -563,7 +722,7 @@ export default function Reports() {
               <tbody>
                 {modelSeries.length === 0 ? (
                   <tr>
-                    <td colSpan={allMonths.length + 3} style={{ textAlign: "center", color: "var(--muted)", padding: "var(--s5)" }}>
+                    <td colSpan={filteredMonths.length + 3} style={{ textAlign: "center", color: "var(--muted)", padding: "var(--s5)" }}>
                       No model sales recorded yet.
                     </td>
                   </tr>
@@ -571,7 +730,7 @@ export default function Reports() {
                   modelSeries.map((ms: any) => (
                     <tr key={ms.model}>
                       <td style={{ fontWeight: 700 }}>{ms.model}</td>
-                      {allMonths.map((m: string) => {
+                      {filteredMonths.map((m: string) => {
                         const cell = ms.monthly_data?.[m];
                         const qty = cell?.qty || 0;
                         return (
@@ -604,7 +763,142 @@ export default function Reports() {
           </div>
         </div>
 
-        {/* 5. P&L STATEMENT WATERFALL */}
+        {/* 5. TOP WHOLESALE DEALERS LEADERBOARD */}
+        <div className="card">
+          <div className="card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "var(--s3)" }}>
+            <div>
+              <h2 style={{ fontSize: 16, fontWeight: 700 }}>🏆 Wholesale Dealers Performance &amp; Volume Leaderboard</h2>
+              <p style={{ color: "var(--muted)", fontSize: 13 }}>
+                Revenue ranking, TV unit volume, and ledger collection status across all partner shops
+              </p>
+            </div>
+            <div className="badge badge-brand">{topDealers.length} Active Wholesale Dealers</div>
+          </div>
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Dealer / Shop Name</th>
+                  <th style={{ textAlign: "center" }}>Orders</th>
+                  <th style={{ textAlign: "right" }}>TV Units Taken</th>
+                  <th style={{ textAlign: "right" }}>Total Business</th>
+                  <th style={{ textAlign: "right" }}>Total Paid</th>
+                  <th style={{ textAlign: "right" }}>Outstanding Balance</th>
+                  <th style={{ textAlign: "center" }}>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {topDealers.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} style={{ textAlign: "center", color: "var(--muted)", padding: "var(--s5)" }}>
+                      No dealer transactions recorded yet.
+                    </td>
+                  </tr>
+                ) : (
+                  topDealers.map((d: any, idx: number) => {
+                    const isFullyPaid = d.balance <= 0.5;
+                    const isPartial = d.amount_paid > 0 && !isFullyPaid;
+                    return (
+                      <tr key={d.party_id || d.party_name} style={{ cursor: "pointer" }} onClick={() => navigate("/dealers")}>
+                        <td style={{ fontWeight: 700, color: "var(--muted)", width: 36 }}>
+                          {idx === 0 ? "🥇" : idx === 1 ? "🥈" : idx === 2 ? "🥉" : idx + 1}
+                        </td>
+                        <td style={{ fontWeight: 700, color: "var(--on-surface)" }}>
+                          {d.party_name}
+                        </td>
+                        <td style={{ textAlign: "center" }}>
+                          <span className="badge" style={{ background: "var(--surface-2)", fontWeight: 600 }}>
+                            {d.orders_count}
+                          </span>
+                        </td>
+                        <td style={{ textAlign: "right", fontWeight: 700 }}>
+                          {d.total_units} units
+                        </td>
+                        <td style={{ textAlign: "right", fontWeight: 800, color: "var(--brand)" }}>
+                          {formatINR(d.total_revenue)}
+                        </td>
+                        <td style={{ textAlign: "right", fontWeight: 600, color: "var(--success)" }}>
+                          {formatINR(d.amount_paid)}
+                        </td>
+                        <td style={{ textAlign: "right", fontWeight: 700, color: isFullyPaid ? "var(--muted)" : "var(--error)" }}>
+                          {formatINR(d.balance)}
+                        </td>
+                        <td style={{ textAlign: "center" }}>
+                          <span
+                            className={`badge ${
+                              isFullyPaid ? "badge-success" : isPartial ? "badge-warning" : "badge-error"
+                            }`}
+                            style={{ fontWeight: 700 }}
+                          >
+                            {isFullyPaid ? "Cleared" : isPartial ? "Partial" : "Unpaid"}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* 6. TELEVISION SCREEN SIZE & TECHNOLOGY DISTRIBUTION */}
+        <div className="card">
+          <div className="card-header">
+            <div>
+              <h2 style={{ fontSize: 16, fontWeight: 700 }}>📺 Screen Size &amp; Technology Distribution</h2>
+              <p style={{ color: "var(--muted)", fontSize: 13 }}>
+                Sales contribution and market share split across 32", 43", 50", 55", 58", and 65" WebOS / QLED models
+              </p>
+            </div>
+          </div>
+          <div style={{ padding: "var(--s4)" }}>
+            {categoryBreakdown.length === 0 ? (
+              <p style={{ color: "var(--muted)", fontSize: 14 }}>No category sales recorded yet.</p>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "var(--s4)" }}>
+                {categoryBreakdown.map((cat: any, idx: number) => {
+                  const barColor = PALETTE[idx % PALETTE.length];
+                  return (
+                    <div
+                      key={cat.category}
+                      style={{
+                        padding: "var(--s4)",
+                        borderRadius: "var(--r-md)",
+                        background: "var(--surface-2)",
+                        border: "1px solid var(--border)",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 6,
+                      }}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span style={{ fontWeight: 700, fontSize: 14 }}>{cat.category}</span>
+                        <span className="badge" style={{ background: `${barColor}22`, color: barColor, fontWeight: 800 }}>
+                          {cat.share_pct}% Share
+                        </span>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginTop: 4 }}>
+                        <span style={{ fontSize: 18, fontWeight: 800, color: "var(--on-surface)" }}>
+                          {formatINR(cat.revenue)}
+                        </span>
+                        <span style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>
+                          {cat.units} units sold
+                        </span>
+                      </div>
+                      <div style={{ background: "var(--surface-3)", height: 8, borderRadius: 4, marginTop: 4, overflow: "hidden" }}>
+                        <div style={{ width: `${Math.min(100, Math.max(2, cat.share_pct))}%`, background: barColor, height: "100%", borderRadius: 4 }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* 7. P&L STATEMENT WATERFALL */}
         <div className="card">
           <div className="card-header" style={{ borderBottom: "1px solid var(--border)" }}>
             <div>

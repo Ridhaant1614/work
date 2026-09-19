@@ -697,36 +697,192 @@ async def reports(user=Depends(current_user)):
     purchases = await db.orders.find({"kind": "purchase", "deleted_at": None}).to_list(5000)
     expenses = await db.expenses.find({"deleted_at": None}).to_list(5000)
 
-    # monthly buckets (last 6 months)
-    def bucket(rows, key):
-        out = {}
-        for r in rows:
-            try:
-                dt = datetime.fromisoformat(r.get("date", now_iso()))
-                mk = dt.strftime("%Y-%m")
-            except Exception:
-                mk = "unknown"
-            out[mk] = round(out.get(mk, 0) + r.get(key, 0), 2)
-        return out
+    # Helper for month key
+    def get_month_key(date_str):
+        try:
+            if not date_str:
+                return datetime.now(timezone.utc).strftime("%Y-%m")
+            dt = datetime.fromisoformat(date_str)
+            return dt.strftime("%Y-%m")
+        except Exception:
+            return datetime.now(timezone.utc).strftime("%Y-%m")
 
-    # top selling products by qty
-    prod_qty = {}
+    sales_by_month = {}
+    purchases_by_month = {}
+    sales_units_by_month = {}
+    model_monthly_map = {}
+    monthly_metrics = {}
+
     for o in sales:
-        for li in o.get("items", []):
-            prod_qty[li["model"]] = prod_qty.get(li["model"], 0) + li["qty"]
-    top_products = sorted([{"model": k, "qty": v} for k, v in prod_qty.items()],
-                          key=lambda x: x["qty"], reverse=True)[:8]
+        m = get_month_key(o.get("date"))
+        sales_by_month[m] = round(sales_by_month.get(m, 0.0) + o.get("total", 0.0), 2)
+        if m not in monthly_metrics:
+            monthly_metrics[m] = {"month": m, "sales": 0.0, "purchases": 0.0, "cogs": 0.0, "gross_profit": 0.0, "units": 0}
+        monthly_metrics[m]["sales"] = round(monthly_metrics[m]["sales"] + o.get("total", 0.0), 2)
+
+        for it in o.get("items", []):
+            qty = it.get("qty", 0)
+            rate = it.get("rate", 0.0)
+            amt = it.get("amount", qty * rate)
+            cost = it.get("cost", rate * 0.9) * qty
+
+            sales_units_by_month[m] = sales_units_by_month.get(m, 0) + qty
+            monthly_metrics[m]["units"] += qty
+            monthly_metrics[m]["cogs"] = round(monthly_metrics[m]["cogs"] + cost, 2)
+
+            model = it.get("model", "Unknown")
+            if model not in model_monthly_map:
+                model_monthly_map[model] = {}
+            if m not in model_monthly_map[model]:
+                model_monthly_map[model][m] = {"qty": 0, "amount": 0.0}
+            model_monthly_map[model][m]["qty"] += qty
+            model_monthly_map[model][m]["amount"] = round(model_monthly_map[model][m]["amount"] + amt, 2)
+
+    for o in purchases:
+        m = get_month_key(o.get("date"))
+        purchases_by_month[m] = round(purchases_by_month.get(m, 0.0) + o.get("total", 0.0), 2)
+        if m not in monthly_metrics:
+            monthly_metrics[m] = {"month": m, "sales": 0.0, "purchases": 0.0, "cogs": 0.0, "gross_profit": 0.0, "units": 0}
+        monthly_metrics[m]["purchases"] = round(monthly_metrics[m]["purchases"] + o.get("total", 0.0), 2)
+
+    for m in monthly_metrics:
+        monthly_metrics[m]["gross_profit"] = round(monthly_metrics[m]["sales"] - monthly_metrics[m]["cogs"], 2)
+        top_m = ""
+        top_qty = 0
+        for model, m_data in model_monthly_map.items():
+            if m in m_data and m_data[m]["qty"] > top_qty:
+                top_qty = m_data[m]["qty"]
+                top_m = model
+        monthly_metrics[m]["top_model"] = top_m or "None"
+
+    month_keys = sorted(list(set(list(sales_by_month.keys()) + list(purchases_by_month.keys()))))
+    if not month_keys:
+        month_keys = [datetime.now(timezone.utc).strftime("%Y-%m")]
+
+    model_series = []
+    for model, m_data in model_monthly_map.items():
+        total_units = sum(v["qty"] for v in m_data.values())
+        total_revenue = round(sum(v["amount"] for v in m_data.values()), 2)
+        model_series.append({
+            "model": model,
+            "monthly_data": m_data,
+            "total_units": total_units,
+            "total_revenue": total_revenue,
+        })
+    model_series.sort(key=lambda x: x["total_units"], reverse=True)
+
+    monthly_breakdown = [monthly_metrics.get(m, {
+        "month": m, "sales": sales_by_month.get(m, 0.0), "purchases": purchases_by_month.get(m, 0.0),
+        "cogs": 0.0, "gross_profit": 0.0, "units": sales_units_by_month.get(m, 0), "top_model": "None"
+    }) for m in month_keys]
+
+    mom_comparison = None
+    if len(monthly_breakdown) >= 2:
+        curr = monthly_breakdown[-1]
+        prev = monthly_breakdown[-2]
+        s_growth = round(((curr["sales"] - prev["sales"]) / prev["sales"] * 100), 1) if prev["sales"] > 0 else (100.0 if curr["sales"] > 0 else 0.0)
+        u_growth = round(((curr["units"] - prev["units"]) / prev["units"] * 100), 1) if prev["units"] > 0 else (100.0 if curr["units"] > 0 else 0.0)
+        mom_comparison = {
+            "current_month": curr["month"],
+            "previous_month": prev["month"],
+            "current_sales": curr["sales"],
+            "previous_sales": prev["sales"],
+            "sales_growth_pct": s_growth,
+            "current_units": curr["units"],
+            "previous_units": prev["units"],
+            "units_growth_pct": u_growth,
+            "current_profit": curr["gross_profit"],
+            "previous_profit": prev["gross_profit"],
+        }
+
+    # Top wholesale dealers leaderboard
+    dealer_map = {}
+    for o in sales:
+        p_name = o.get("party_name") or "Unknown Dealer"
+        p_id = o.get("party_id") or p_name
+        if p_id not in dealer_map:
+            dealer_map[p_id] = {
+                "party_name": p_name,
+                "party_id": o.get("party_id"),
+                "orders_count": 0,
+                "total_revenue": 0.0,
+                "total_units": 0,
+                "amount_paid": 0.0,
+                "balance": 0.0,
+            }
+        dealer_map[p_id]["orders_count"] += 1
+        dealer_map[p_id]["total_revenue"] = round(dealer_map[p_id]["total_revenue"] + o.get("total", 0.0), 2)
+        paid = sum(p.get("amount", 0.0) for p in o.get("payments", []))
+        dealer_map[p_id]["amount_paid"] = round(dealer_map[p_id]["amount_paid"] + paid, 2)
+        bal = max(0.0, o.get("total", 0.0) - paid)
+        dealer_map[p_id]["balance"] = round(dealer_map[p_id]["balance"] + bal, 2)
+        for it in o.get("items", []):
+            dealer_map[p_id]["total_units"] += it.get("qty", 0)
+    top_dealers = sorted(list(dealer_map.values()), key=lambda x: x["total_revenue"], reverse=True)
+
+    # Screen size & category distribution
+    import re
+    cat_map = {}
+    tot_sales_units = 0
+    tot_sales_rev = 0.0
+    for o in sales:
+        for it in o.get("items", []):
+            model = it.get("model", "")
+            if re.search(r'\b32\b', model, re.I):
+                cat = '32" HD/Smart'
+            elif re.search(r'\b43\b', model, re.I):
+                cat = '43" FHD/4K Smart'
+            elif re.search(r'\b50\b', model, re.I):
+                cat = '50" 4K Smart'
+            elif re.search(r'\b55\b', model, re.I):
+                cat = '55" 4K UHD'
+            elif re.search(r'\b58\b', model, re.I):
+                cat = '58" 4K QLED'
+            elif re.search(r'\b65\b', model, re.I):
+                cat = '65" 4K QLED/WebOS'
+            elif re.search(r'\b75\b', model, re.I):
+                cat = '75" Ultra Premium'
+            else:
+                cat = "Other TV"
+
+            qty = it.get("qty", 0)
+            amt = it.get("amount", qty * it.get("rate", 0.0))
+            tot_sales_units += qty
+            tot_sales_rev += amt
+
+            if cat not in cat_map:
+                cat_map[cat] = {"category": cat, "units": 0, "revenue": 0.0, "share_pct": 0.0}
+            cat_map[cat]["units"] += qty
+            cat_map[cat]["revenue"] = round(cat_map[cat]["revenue"] + amt, 2)
+
+    category_breakdown = []
+    for c in cat_map.values():
+        c["share_pct"] = round((c["revenue"] / tot_sales_rev * 100), 1) if tot_sales_rev > 0 else 0.0
+        category_breakdown.append(c)
+    category_breakdown.sort(key=lambda x: x["revenue"], reverse=True)
+
+    # Executive KPIs
+    tot_paid = sum(sum(p.get("amount", 0.0) for p in o.get("payments", [])) for o in sales)
+    sorted_by_rev = sorted(model_series, key=lambda x: x["total_revenue"], reverse=True)
+    executive_kpis = {
+        "top_model_by_volume": {"model": model_series[0]["model"], "units": model_series[0]["total_units"]} if model_series else None,
+        "top_model_by_revenue": {"model": sorted_by_rev[0]["model"], "revenue": sorted_by_rev[0]["total_revenue"]} if sorted_by_rev else None,
+        "avg_order_value": round(tot_sales_rev / len(sales), 2) if sales else 0.0,
+        "collection_rate": round((tot_paid / tot_sales_rev * 100), 1) if tot_sales_rev > 0 else 0.0,
+        "total_sales_units": tot_sales_units,
+        "total_collected": round(tot_paid, 2),
+    }
 
     # expense by category
     exp_cat = {}
     for e in expenses:
-        exp_cat[e["category"]] = round(exp_cat.get(e["category"], 0) + e["amount"], 2)
+        exp_cat[e["category"]] = round(exp_cat.get(e["category"], 0.0) + e["amount"], 2)
 
     # overdue receivables/payables
     def overdue(rows):
         out = []
         for o in rows:
-            bal = o.get("total", 0) - sum(p["amount"] for p in o.get("payments", []))
+            bal = o.get("total", 0.0) - sum(p.get("amount", 0.0) for p in o.get("payments", []))
             if bal > 0.5:
                 out.append({"id": o["id"], "party_name": o.get("party_name"),
                             "ref_no": o.get("ref_no"), "balance": round(bal, 2),
@@ -736,9 +892,16 @@ async def reports(user=Depends(current_user)):
 
     return {
         "summary": summary,
-        "sales_by_month": bucket(sales, "total"),
-        "purchases_by_month": bucket(purchases, "total"),
-        "top_products": top_products,
+        "sales_by_month": sales_by_month,
+        "purchases_by_month": purchases_by_month,
+        "sales_units_by_month": sales_units_by_month,
+        "month_keys": month_keys,
+        "model_series": model_series,
+        "monthly_breakdown": monthly_breakdown,
+        "mom_comparison": mom_comparison,
+        "top_dealers": top_dealers,
+        "category_breakdown": category_breakdown,
+        "executive_kpis": executive_kpis,
         "expense_by_category": exp_cat,
         "overdue_receivables": overdue(sales),
         "overdue_payables": overdue(purchases),
