@@ -9,6 +9,8 @@ import {
   deleteDealerFromFirestore,
   syncExpenseToFirestore,
   deleteExpenseFromFirestore,
+  getLocalDeletedIds,
+  recordLocalDeletedId,
 } from "./firebaseSync";
 
 export const SEED_PRODUCTS = [
@@ -97,7 +99,12 @@ function getStored<T>(key: string, defaultVal: T): T {
       localStorage.setItem(STORAGE_PREFIX + key, JSON.stringify(defaultVal));
       return defaultVal;
     }
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && ["orders", "products", "dealers", "expenses"].includes(key)) {
+      const deletedIds = getLocalDeletedIds(key);
+      return parsed.filter((item: any) => item && item.id && !deletedIds.has(item.id) && !item.deleted_at) as T;
+    }
+    return parsed;
   } catch {
     return defaultVal;
   }
@@ -105,6 +112,12 @@ function getStored<T>(key: string, defaultVal: T): T {
 
 function setStored<T>(key: string, val: T) {
   try {
+    if (Array.isArray(val) && ["orders", "products", "dealers", "expenses"].includes(key)) {
+      const deletedIds = getLocalDeletedIds(key);
+      const filtered = val.filter((item: any) => item && item.id && !deletedIds.has(item.id) && !item.deleted_at);
+      localStorage.setItem(STORAGE_PREFIX + key, JSON.stringify(filtered));
+      return;
+    }
     localStorage.setItem(STORAGE_PREFIX + key, JSON.stringify(val));
   } catch {}
 }
@@ -368,6 +381,7 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
       return updatedProd || body;
     }
     if (method === "DELETE") {
+      recordLocalDeletedId("products", pid);
       products = products.filter((item) => item.id !== pid);
       setStored("products", products);
       deleteProductFromFirestore(pid);
@@ -400,6 +414,7 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
       return body;
     }
     if (method === "DELETE") {
+      recordLocalDeletedId("dealers", did);
       dealers = dealers.filter((item) => item.id !== did);
       setStored("dealers", dealers);
       deleteDealerFromFirestore(did);
@@ -432,6 +447,7 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
       return body;
     }
     if (method === "DELETE") {
+      recordLocalDeletedId("expenses", eid);
       expenses = expenses.filter((item) => item.id !== eid);
       setStored("expenses", expenses);
       deleteExpenseFromFirestore(eid);
@@ -465,6 +481,7 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
       return updateOrderInStore(oid, body);
     }
     if (method === "DELETE") {
+      recordLocalDeletedId("orders", oid);
       let orders = getStored<any[]>("orders", SEED_ORDERS);
       const target = orders.find((item) => item.id === oid);
       if (target) {
