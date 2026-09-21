@@ -111,6 +111,21 @@ export default function OrderForm({ kind }: { kind: Kind }) {
     if (!isSale && !partyName.trim()) { show("Enter supplier name", "error"); return; }
     if (lines.length === 0) { show("Add at least one product", "error"); return; }
     if (lines.some(l => !(parseFloat(l.qty) > 0))) { show("Enter valid quantity for all items", "error"); return; }
+
+    if (isSale) {
+      for (const l of lines) {
+        const p = products.find((x: any) => x.id === l.product_id);
+        const enteredQty = parseFloat(l.qty) || 0;
+        const existingQtyInOrder = isEdit && existing
+          ? (existing.items || []).filter((it: any) => it.product_id === l.product_id).reduce((s: number, it: any) => s + (Number(it.qty) || 0), 0)
+          : 0;
+        const availableStock = (Number(p?.qty_on_hand) || 0) + existingQtyInOrder;
+        if (enteredQty > availableStock) {
+          show(`Notice: ${l.model || "Product"} sale exceeds on-hand stock (${availableStock} available). Stock will reflect deficit until purchase lot is recorded.`, "info");
+        }
+      }
+    }
+
     mutation.mutate();
   }
 

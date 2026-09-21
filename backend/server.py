@@ -239,10 +239,42 @@ async def update_staff(staff_id: str, body: StaffUpdate, _=Depends(owner_only)):
 # ---------------------------------------------------------------------------
 # Products
 # ---------------------------------------------------------------------------
+async def _reconcile_products_inventory(products: list) -> list:
+    orders = await db.orders.find({"deleted_at": None}).to_list(5000)
+    stats = {}
+    for o in orders:
+        kind = o.get("kind", "sale")
+        for it in o.get("items", []):
+            pid = str(it.get("product_id") or "")
+            model = (it.get("model") or "").strip().lower()
+            qty = float(it.get("qty", 0))
+            for key in (pid, model):
+                if key:
+                    if key not in stats:
+                        stats[key] = {"purchased": 0.0, "sold": 0.0}
+                    if kind == "purchase":
+                        stats[key]["purchased"] += qty
+                    elif kind == "sale":
+                        stats[key]["sold"] += qty
+
+    for p in products:
+        pid = str(p.get("id") or "")
+        model = (p.get("model") or "").strip().lower()
+        pur = stats.get(pid, {}).get("purchased", 0.0) or stats.get(model, {}).get("purchased", 0.0)
+        sld = stats.get(pid, {}).get("sold", 0.0) or stats.get(model, {}).get("sold", 0.0)
+        opening = max(0.0, float(p.get("opening_stock", 0.0)))
+        in_stock = opening + pur - sld
+        p["purchased_qty"] = pur
+        p["sold_qty"] = sld
+        p["qty_on_hand"] = in_stock
+    return products
+
+
 @api_router.get("/products")
 async def list_products(user=Depends(current_user)):
     rows = await db.products.find({"deleted_at": None}).sort("model", 1).to_list(1000)
-    return [clean(r) for r in rows]
+    reconciled = await _reconcile_products_inventory([clean(r) for r in rows])
+    return reconciled
 
 
 @api_router.post("/products", status_code=201)
@@ -250,7 +282,9 @@ async def create_product(body: ProductIn, user=Depends(current_user)):
     doc = body.model_dump()
     doc["id"] = new_id()
     doc["sku"] = doc.get("sku") or doc["model"].upper().replace(" ", "-")[:24]
-    doc["qty_on_hand"] = doc.get("qty_on_hand") or 0
+    opening = max(0.0, float(doc.get("qty_on_hand") or 0.0))
+    doc["opening_stock"] = opening
+    doc["qty_on_hand"] = opening
     doc["deleted_at"] = None
     doc["created_at"] = now_iso()
     await db.products.insert_one(doc)
@@ -260,6 +294,8 @@ async def create_product(body: ProductIn, user=Depends(current_user)):
 @api_router.put("/products/{pid}")
 async def update_product(pid: str, body: ProductIn, user=Depends(current_user)):
     changes = body.model_dump(exclude_unset=True)
+    if "qty_on_hand" in changes:
+        changes["opening_stock"] = max(0.0, float(changes["qty_on_hand"]))
     r = await db.products.find_one_and_update({"id": pid, "deleted_at": None},
                                               {"$set": changes}, return_document=True)
     if not r:
@@ -273,12 +309,12 @@ async def adjust_product_stock(pid: str, body: StockAdjustIn, user=Depends(curre
     if not prod:
         raise HTTPException(404, "Product not found")
     if body.new_qty is not None:
-        new_stock = float(body.new_qty)
+        new_stock = max(0.0, float(body.new_qty))
     elif body.qty_delta is not None:
-        new_stock = float(prod.get("qty_on_hand", 0)) + float(body.qty_delta)
+        new_stock = max(0.0, float(prod.get("qty_on_hand", 0)) + float(body.qty_delta))
     else:
         raise HTTPException(400, "Must provide qty_delta or new_qty")
-    r = await db.products.find_one_and_update({"id": pid}, {"$set": {"qty_on_hand": new_stock}}, return_document=True)
+    r = await db.products.find_one_and_update({"id": pid}, {"$set": {"qty_on_hand": new_stock, "opening_stock": new_stock}}, return_document=True)
     return clean(r)
 
 
@@ -648,7 +684,8 @@ async def _compute_summary():
     sales = await db.orders.find({"kind": "sale", "deleted_at": None}).to_list(5000)
     purchases = await db.orders.find({"kind": "purchase", "deleted_at": None}).to_list(5000)
     expenses = await db.expenses.find({"deleted_at": None}).to_list(5000)
-    products = await db.products.find({"deleted_at": None}).to_list(2000)
+    products_raw = await db.products.find({"deleted_at": None}).to_list(2000)
+    products = await _reconcile_products_inventory([clean(p) for p in products_raw])
 
     total_sales = round(sum(o.get("total", 0) for o in sales), 2)
     total_purchases = round(sum(o.get("total", 0) for o in purchases), 2)
@@ -658,11 +695,14 @@ async def _compute_summary():
     receivable = round(sum(max(0, o.get("total", 0) - sum(p["amount"] for p in o.get("payments", []))) for o in sales), 2)
     payable = round(sum(max(0, o.get("total", 0) - sum(p["amount"] for p in o.get("payments", []))) for o in purchases), 2)
 
-    inventory_value = round(sum(p.get("qty_on_hand", 0) * p.get("cost_price", 0) for p in products), 2)
-    units_in_stock = sum(p.get("qty_on_hand", 0) for p in products)
+    inventory_value = round(sum(max(0.0, float(p.get("qty_on_hand", 0))) * float(p.get("cost_price", 0)) for p in products), 2)
+    units_in_stock = int(sum(max(0.0, float(p.get("qty_on_hand", 0))) for p in products))
     net_profit = round(total_sales - cogs - total_expenses, 2)
 
-    low_stock = [clean(p) for p in products if p.get("qty_on_hand", 0) <= 2]
+    negative_stock = [clean(p) for p in products if float(p.get("qty_on_hand", 0)) < 0]
+    negative_stock.sort(key=lambda p: p.get("qty_on_hand", 0))
+
+    low_stock = [clean(p) for p in products if 0 < float(p.get("qty_on_hand", 0)) <= 2]
     low_stock.sort(key=lambda p: p.get("qty_on_hand", 0))
 
     return {
@@ -679,6 +719,7 @@ async def _compute_summary():
         "sales_count": len(sales),
         "purchases_count": len(purchases),
         "low_stock": low_stock,
+        "negative_stock": negative_stock,
     }
 
 

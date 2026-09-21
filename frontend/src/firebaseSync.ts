@@ -20,6 +20,7 @@ import {
   SEED_DEALERS,
   SEED_ORDERS,
   SEED_EXPENSES,
+  recalculateAllInventory,
 } from "./mockData";
 
 let rtdbInstance: Database | null = null;
@@ -174,11 +175,16 @@ export function startRealtimeSync(queryClient: QueryClient) {
         const filtered = currentOrders.filter((o) => o && o.id && !deletedSet.has(o.id));
         if (filtered.length !== currentOrders.length) {
           updateLocalStore("orders", filtered);
+          const currentProducts = getLocalStore<any[]>("products", SEED_PRODUCTS);
+          const reconciled = recalculateAllInventory(currentProducts, filtered);
+          updateLocalStore("products", reconciled);
+
           queryClient.invalidateQueries({ queryKey: ["sales"] });
           queryClient.invalidateQueries({ queryKey: ["purchases"] });
           queryClient.invalidateQueries({ queryKey: ["orders"] });
           queryClient.invalidateQueries({ queryKey: ["dashboard"] });
           queryClient.invalidateQueries({ queryKey: ["reports"] });
+          queryClient.invalidateQueries({ queryKey: ["products"] });
         }
       }
     }
@@ -207,12 +213,18 @@ export function startRealtimeSync(queryClient: QueryClient) {
 
       updateLocalStore("orders", orders);
 
+      // Ledger-based inventory recomputation on incoming order changes
+      const currentProducts = getLocalStore<any[]>("products", SEED_PRODUCTS);
+      const reconciled = recalculateAllInventory(currentProducts, orders);
+      updateLocalStore("products", reconciled);
+
       notifyStatusUpdate({
         mode: "rtdb",
         lastSyncedAt: new Date(),
         activeCollectionCounts: {
           ...currentStatus.activeCollectionCounts,
           orders: orders.length,
+          products: reconciled.length,
         },
       });
 
@@ -223,6 +235,7 @@ export function startRealtimeSync(queryClient: QueryClient) {
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       queryClient.invalidateQueries({ queryKey: ["reports"] });
       queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["inventory"] });
     },
     (err) => {
       console.warn("RTDB orders listener error:", err);
@@ -240,13 +253,16 @@ export function startRealtimeSync(queryClient: QueryClient) {
       const deletedIds = getLocalDeletedIds("products");
       const products = (allProducts as any[])
         .filter((p) => p && p.id && !deletedIds.has(p.id) && !p.deleted_at);
-      updateLocalStore("products", products);
+
+      const currentOrders = getLocalStore<any[]>("orders", []);
+      const reconciled = recalculateAllInventory(products, currentOrders);
+      updateLocalStore("products", reconciled);
 
       notifyStatusUpdate({
         lastSyncedAt: new Date(),
         activeCollectionCounts: {
           ...currentStatus.activeCollectionCounts,
-          products: products.length,
+          products: reconciled.length,
         },
       });
 

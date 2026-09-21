@@ -59,7 +59,7 @@ export default function Inventory() {
         category: newDraft.category.trim() || "Television",
         cost_price: parseFloat(newDraft.cost_price) || 0,
         sell_price: parseFloat(newDraft.sell_price) || 0,
-        qty_on_hand: parseFloat(newDraft.qty_on_hand) || 0,
+        qty_on_hand: Math.max(0, parseFloat(newDraft.qty_on_hand) || 0),
       };
       return apiPost("/products", body);
     },
@@ -82,7 +82,7 @@ export default function Inventory() {
         category: editProduct.category.trim() || "Television",
         cost_price: parseFloat(editProduct.cost_price) || 0,
         sell_price: parseFloat(editProduct.sell_price) || 0,
-        qty_on_hand: parseFloat(editProduct.qty_on_hand) || 0,
+        qty_on_hand: Math.max(0, parseFloat(editProduct.qty_on_hand) || 0),
       };
       return apiPut(`/products/${editProduct.id}`, body);
     },
@@ -99,13 +99,13 @@ export default function Inventory() {
     mutationFn: () => {
       if (!adjustItem) return Promise.reject(new Error("No item selected"));
       return apiPost(`/products/${adjustItem.id}/adjust-stock`, {
-        new_qty: adjustItem.new_qty,
+        new_qty: Math.max(0, adjustItem.new_qty),
         reason: adjustItem.reason.trim(),
       });
     },
     onSuccess: () => {
       invalidateAll();
-      const updatedQty = adjustItem?.new_qty;
+      const updatedQty = adjustItem ? Math.max(0, adjustItem.new_qty) : 0;
       setAdjustItem(null);
       show(`Stock updated to ${updatedQty} units`, "success");
     },
@@ -123,9 +123,11 @@ export default function Inventory() {
     onError: (e: any) => show(e?.message || "Failed to remove product", "error"),
   });
 
-  const totalUnits = data.reduce((a: number, p: any) => a + (Number(p.qty_on_hand) || 0), 0);
+  const totalUnits = data.reduce((a: number, p: any) => a + Math.max(0, Number(p.qty_on_hand) || 0), 0);
+  const totalPurchased = data.reduce((a: number, p: any) => a + (Number(p.purchased_qty) || 0), 0);
+  const totalSold = data.reduce((a: number, p: any) => a + (Number(p.sold_qty) || 0), 0);
   const totalValue = data.reduce((a: number, p: any) => a + Math.max(0, Number(p.qty_on_hand) || 0) * (Number(p.cost_price) || 0), 0);
-  const lowStockCount = data.filter((p: any) => (Number(p.qty_on_hand) || 0) >= 0 && (Number(p.qty_on_hand) || 0) <= 2).length;
+  const lowStockCount = data.filter((p: any) => (Number(p.qty_on_hand) || 0) > 0 && (Number(p.qty_on_hand) || 0) <= 2).length;
   const outOfStockCount = data.filter((p: any) => (Number(p.qty_on_hand) || 0) === 0).length;
   const negativeStockCount = data.filter((p: any) => (Number(p.qty_on_hand) || 0) < 0).length;
 
@@ -134,7 +136,7 @@ export default function Inventory() {
     if (stockFilter === "in_stock") {
       list = list.filter((p: any) => (Number(p.qty_on_hand) || 0) > 2);
     } else if (stockFilter === "low_stock") {
-      list = list.filter((p: any) => (Number(p.qty_on_hand) || 0) >= 0 && (Number(p.qty_on_hand) || 0) <= 2);
+      list = list.filter((p: any) => (Number(p.qty_on_hand) || 0) > 0 && (Number(p.qty_on_hand) || 0) <= 2);
     } else if (stockFilter === "out") {
       list = list.filter((p: any) => (Number(p.qty_on_hand) || 0) === 0);
     } else if (stockFilter === "negative") {
@@ -158,7 +160,7 @@ export default function Inventory() {
       category: p.category || "Television",
       cost_price: String(p.cost_price ?? ""),
       sell_price: String(p.sell_price ?? ""),
-      qty_on_hand: String(p.qty_on_hand ?? 0),
+      qty_on_hand: String(Number(p.qty_on_hand) || 0),
     });
   }
 
@@ -194,7 +196,7 @@ export default function Inventory() {
       <div className="page-header">
         <div>
           <h1>Inventory &amp; Stock Master</h1>
-          <p>{data.length} models · {totalUnits} units on hand · {formatINR(totalValue)} inventory valuation</p>
+          <p>{data.length} models · {totalUnits} units in godown · {formatINR(totalValue)} inventory valuation</p>
         </div>
         <div className="page-header-actions">
           <button className="btn btn-primary btn-sm" onClick={() => { setNewDraft(EMPTY_DRAFT); setOpenAdd(true); }}>
@@ -212,7 +214,7 @@ export default function Inventory() {
           <div className="kpi-card">
             <div className="kpi-icon" style={{ background: "rgba(15, 76, 92, 0.12)", color: "var(--brand)" }}>📦</div>
             <div className="kpi-value" style={{ color: "var(--brand)" }}>{totalUnits}</div>
-            <div className="kpi-label">Units in Godown</div>
+            <div className="kpi-label">Units in Godown (Stock)</div>
           </div>
           <div className="kpi-card">
             <div className="kpi-icon" style={{ background: "rgba(16, 185, 129, 0.12)", color: "var(--success)" }}>💰</div>
@@ -220,19 +222,19 @@ export default function Inventory() {
             <div className="kpi-label">Inventory Valuation</div>
           </div>
           <div className="kpi-card">
-            <div className="kpi-icon" style={{ background: "rgba(245, 158, 11, 0.12)", color: "var(--warning)" }}>⚠️</div>
-            <div className="kpi-value" style={{ color: "var(--warning)" }}>{lowStockCount}</div>
-            <div className="kpi-label">Low Stock (≤ 2 units)</div>
-          </div>
-          <div className="kpi-card" style={negativeStockCount > 0 ? { border: "1px solid var(--error)", background: "rgba(239, 68, 68, 0.04)" } : {}}>
-            <div className="kpi-icon" style={{ background: "rgba(239, 68, 68, 0.12)", color: "var(--error)" }}>🔴</div>
-            <div className="kpi-value" style={{ color: "var(--error)" }}>{negativeStockCount}</div>
-            <div className="kpi-label">Deficit (Awaiting Lot)</div>
+            <div className="kpi-icon" style={{ background: "rgba(59, 130, 246, 0.12)", color: "#3b82f6" }}>📥</div>
+            <div className="kpi-value" style={{ color: "#3b82f6" }}>{totalPurchased}</div>
+            <div className="kpi-label">Total Purchased (Units)</div>
           </div>
           <div className="kpi-card">
-            <div className="kpi-icon" style={{ background: "rgba(100, 116, 139, 0.12)", color: "var(--muted)" }}>🚫</div>
-            <div className="kpi-value" style={{ color: "var(--on-surface-2)" }}>{outOfStockCount}</div>
-            <div className="kpi-label">Out of Stock (0 units)</div>
+            <div className="kpi-icon" style={{ background: "rgba(139, 92, 246, 0.12)", color: "#8b5cf6" }}>📤</div>
+            <div className="kpi-value" style={{ color: "#8b5cf6" }}>{totalSold}</div>
+            <div className="kpi-label">Total Sold (Units)</div>
+          </div>
+          <div className="kpi-card">
+            <div className="kpi-icon" style={{ background: "rgba(245, 158, 11, 0.12)", color: "var(--warning)" }}>⚠️</div>
+            <div className="kpi-value" style={{ color: "var(--warning)" }}>{lowStockCount + outOfStockCount}</div>
+            <div className="kpi-label">Reorder Alerts ({lowStockCount} Low · {outOfStockCount} Out)</div>
           </div>
         </div>
 
@@ -267,21 +269,21 @@ export default function Inventory() {
             >
               Low Stock ({lowStockCount})
             </button>
-            {negativeStockCount > 0 && (
-              <button
-                className={`chip${stockFilter === "negative" ? " active" : ""}`}
-                style={stockFilter === "negative" ? { background: "var(--error)", color: "#fff", borderColor: "var(--error)" } : { color: "var(--error)", borderColor: "var(--error)" }}
-                onClick={() => setStockFilter("negative")}
-              >
-                🔴 Deficit / Awaiting Lot ({negativeStockCount})
-              </button>
-            )}
             <button
               className={`chip${stockFilter === "out" ? " active" : ""}`}
               onClick={() => setStockFilter("out")}
             >
               Out of Stock ({outOfStockCount})
             </button>
+            {negativeStockCount > 0 && (
+              <button
+                className={`chip${stockFilter === "negative" ? " active" : ""}`}
+                style={stockFilter === "negative" ? { background: "var(--error)", color: "#fff", borderColor: "var(--error)" } : { color: "var(--error)", borderColor: "var(--error)" }}
+                onClick={() => setStockFilter("negative")}
+              >
+                🔴 Deficit / Sales &gt; Purchases ({negativeStockCount})
+              </button>
+            )}
           </div>
         </div>
 
@@ -310,10 +312,12 @@ export default function Inventory() {
                   <th>Model</th>
                   <th className="hide-mobile">SKU</th>
                   <th className="hide-mobile">Category</th>
+                  <th className="hide-mobile" style={{ textAlign: "right" }}>Purchased</th>
+                  <th className="hide-mobile" style={{ textAlign: "right" }}>Sold</th>
+                  <th style={{ textAlign: "right" }}>In Stock</th>
                   <th className="hide-mobile" style={{ textAlign: "right" }}>Cost Price</th>
                   <th className="hide-mobile" style={{ textAlign: "right" }}>Sell Price</th>
                   <th className="hide-mobile" style={{ textAlign: "right" }}>Margin</th>
-                  <th style={{ textAlign: "right" }}>Stock</th>
                   <th>Status</th>
                   <th style={{ textAlign: "right" }}>Actions</th>
                 </tr>
@@ -321,11 +325,13 @@ export default function Inventory() {
               <tbody>
                 {filtered.map((p: any) => {
                   const qty = Number(p.qty_on_hand) || 0;
+                  const purchasedQty = Number(p.purchased_qty) || 0;
+                  const soldQty = Number(p.sold_qty) || 0;
                   const cost = Number(p.cost_price) || 0;
                   const sell = Number(p.sell_price) || 0;
                   const margin = sell && cost ? (((sell - cost) / cost) * 100).toFixed(1) : "—";
                   const isNegative = qty < 0;
-                  const low = qty >= 0 && qty <= 2;
+                  const low = qty > 0 && qty <= 2;
                   const isZero = qty === 0;
 
                   return (
@@ -333,12 +339,12 @@ export default function Inventory() {
                       key={p.id}
                       className="clickable"
                       onClick={() => handleOpenEdit(p)}
-                      style={isNegative ? { background: "rgba(239, 68, 68, 0.05)" } : undefined}
+                      style={isNegative ? { background: "rgba(239, 68, 68, 0.06)" } : undefined}
                     >
                       <td>
                         <div style={{ fontWeight: 700 }}>{p.model}</div>
                         <div className="show-mobile" style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
-                          {p.sku ? `${p.sku} · ` : ""}{formatINR(sell)}
+                          {p.sku ? `${p.sku} · ` : ""}{formatINR(sell)} · In: {purchasedQty} / Out: {soldQty}
                         </div>
                       </td>
                       <td className="hide-mobile">
@@ -347,9 +353,12 @@ export default function Inventory() {
                         </span>
                       </td>
                       <td className="hide-mobile" style={{ color: "var(--muted)", fontSize: 13 }}>{p.category || "Television"}</td>
-                      <td className="hide-mobile" style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{formatINR(cost)}</td>
-                      <td className="hide-mobile" style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{formatINR(sell)}</td>
-                      <td className="hide-mobile" style={{ textAlign: "right", color: "var(--success)", fontWeight: 600 }}>{margin}%</td>
+                      <td className="hide-mobile" style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", color: "#3b82f6", fontWeight: 600 }}>
+                        {purchasedQty}
+                      </td>
+                      <td className="hide-mobile" style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", color: "#8b5cf6", fontWeight: 600 }}>
+                        {soldQty}
+                      </td>
                       <td style={{
                         textAlign: "right",
                         fontWeight: 800,
@@ -359,10 +368,17 @@ export default function Inventory() {
                       }}>
                         {qty}
                       </td>
+                      <td className="hide-mobile" style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{formatINR(cost)}</td>
+                      <td className="hide-mobile" style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{formatINR(sell)}</td>
+                      <td className="hide-mobile" style={{ textAlign: "right", color: "var(--success)", fontWeight: 600 }}>{margin}%</td>
                       <td>
                         {isNegative ? (
-                          <span className="badge badge-error" style={{ fontWeight: 700 }}>
-                            🔴 {qty} (Awaiting Lot)
+                          <span
+                            className="badge badge-error"
+                            style={{ fontWeight: 700 }}
+                            title={`Sold before purchase bill entered. Deficit of ${Math.abs(qty)} unit(s) pending purchase.`}
+                          >
+                            🔴 Deficit ({qty})
                           </span>
                         ) : isZero ? (
                           <span className="badge badge-error">Out of Stock</span>
@@ -614,7 +630,7 @@ export default function Inventory() {
                       type="button"
                       className="btn btn-outline btn-sm"
                       style={{ flex: 1, minWidth: 50, fontWeight: 700 }}
-                      onClick={() => setAdjustItem({ ...adjustItem, new_qty: adjustItem.new_qty + delta })}
+                      onClick={() => setAdjustItem({ ...adjustItem, new_qty: Math.max(0, adjustItem.new_qty + delta) })}
                     >
                       {delta > 0 ? `+${delta}` : delta}
                     </button>
@@ -627,8 +643,9 @@ export default function Inventory() {
                 <input
                   className="input"
                   type="number"
+                  min={0}
                   value={adjustItem.new_qty}
-                  onChange={(e) => setAdjustItem({ ...adjustItem, new_qty: parseInt(e.target.value) || 0 })}
+                  onChange={(e) => setAdjustItem({ ...adjustItem, new_qty: Math.max(0, parseInt(e.target.value) || 0) })}
                 />
               </div>
 

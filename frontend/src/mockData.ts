@@ -122,6 +122,42 @@ function setStored<T>(key: string, val: T) {
   } catch {}
 }
 
+// Recalculate inventory dynamically based on purchases and sales ledger
+export function recalculateAllInventory(products: any[], orders: any[]): any[] {
+  const pList = Array.isArray(products) ? products : [];
+  const oList = Array.isArray(orders) ? orders : [];
+
+  return pList.map((p) => {
+    let purchased = 0;
+    let sold = 0;
+
+    oList.forEach((o) => {
+      if (o.deleted_at) return;
+      const kind = o.kind || (o.party_id ? "sale" : "purchase");
+      (o.items || []).forEach((it: any) => {
+        const matchesId = it.product_id && String(it.product_id) === String(p.id);
+        const matchesModel = it.model && p.model && it.model.toLowerCase().trim() === p.model.toLowerCase().trim();
+        if (matchesId || matchesModel) {
+          const qty = Number(it.qty) || 0;
+          if (kind === "purchase") purchased += qty;
+          else if (kind === "sale") sold += qty;
+        }
+      });
+    });
+
+    const opening = Math.max(0, Number(p.opening_stock) || 0);
+    const inStock = opening + purchased - sold;
+
+    return {
+      ...p,
+      opening_stock: opening,
+      purchased_qty: purchased,
+      sold_qty: sold,
+      qty_on_hand: inStock,
+    };
+  });
+}
+
 export function handleMockApi(path: string, method = "GET", body?: any): any {
   // Normalize path
   const p = path.replace(/^\/api/, "");
@@ -220,17 +256,11 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
     orders.unshift(newOrder);
     setStored("orders", orders);
 
-    // Adjust product inventory
-    const multiplier = kind === "purchase" ? 1 : -1;
-    items.forEach((it: any) => {
-      const prod = products.find((pr) => pr.id === it.product_id || pr.model === it.model);
-      if (prod) {
-        prod.qty_on_hand = (Number(prod.qty_on_hand) || 0) + multiplier * it.qty;
-      }
-    });
-    setStored("products", products);
+    // Ledger-based inventory recomputation: Inventory = Purchases - Sales
+    const updatedProducts = recalculateAllInventory(products, orders);
+    setStored("products", updatedProducts);
     syncOrderToFirestore(newOrder);
-    syncProductsBatchToFirestore(products);
+    syncProductsBatchToFirestore(updatedProducts);
 
     return serializeOrder(newOrder);
   }
@@ -242,19 +272,9 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
     if (idx === -1) throw new Error("Order not found: " + oid);
 
     const existing = orders[idx];
-    const kind = existing.kind || (ordBody.party_id ? "sale" : "purchase");
     const products = getStored<any[]>("products", SEED_PRODUCTS);
 
-    // 1. Reverse the inventory effect of the old items
-    const prevMultiplier = kind === "purchase" ? -1 : 1;
-    (existing.items || []).forEach((it: any) => {
-      const prod = products.find((pr) => pr.id === it.product_id || pr.model === it.model);
-      if (prod) {
-        prod.qty_on_hand = (Number(prod.qty_on_hand) || 0) + prevMultiplier * (Number(it.qty) || 0);
-      }
-    });
-
-    // 2. Parse new line items
+    // Parse new line items
     const newItems = (ordBody.items || []).map((it: any) => {
       const prod = products.find((pr) => pr.id === it.product_id || pr.model === it.model);
       const cost = prod ? Number(prod.cost_price) || 0 : Number(it.cost) || 0;
@@ -272,17 +292,7 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
 
     const total = Math.round(newItems.reduce((s: number, it: any) => s + it.amount, 0) * 100) / 100;
 
-    // 3. Apply the new inventory effect
-    const newMultiplier = kind === "purchase" ? 1 : -1;
-    newItems.forEach((it: any) => {
-      const prod = products.find((pr) => pr.id === it.product_id || pr.model === it.model);
-      if (prod) {
-        prod.qty_on_hand = (Number(prod.qty_on_hand) || 0) + newMultiplier * it.qty;
-      }
-    });
-    setStored("products", products);
-
-    // 4. Update order, updating/preserving payments and id
+    // Update order, updating/preserving payments and id
     let payments = existing.payments || [];
     if (ordBody.payment_status !== undefined || ordBody.amount_paid !== undefined) {
       const pStatus = (ordBody.payment_status || "").toLowerCase().trim();
@@ -311,15 +321,23 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
 
     orders[idx] = updated;
     setStored("orders", orders);
+
+    // Ledger-based inventory recomputation: Inventory = Purchases - Sales
+    const updatedProducts = recalculateAllInventory(products, orders);
+    setStored("products", updatedProducts);
     syncOrderToFirestore(updated);
-    syncProductsBatchToFirestore(products);
+    syncProductsBatchToFirestore(updatedProducts);
 
     return serializeOrder(updated);
   }
 
   // Products
   if (p === "/products") {
-    const products = getStored<any[]>("products", SEED_PRODUCTS);
+    const orders = getStored<any[]>("orders", SEED_ORDERS);
+    let products = getStored<any[]>("products", SEED_PRODUCTS);
+    products = recalculateAllInventory(products, orders);
+    setStored("products", products);
+
     if (method === "GET") return products;
     if (method === "POST") {
       const np = {
@@ -329,9 +347,13 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
         category: body.category || "Television",
         cost_price: Number(body.cost_price) || 0,
         sell_price: Number(body.sell_price) || 0,
-        qty_on_hand: Number(body.qty_on_hand) || 0,
+        opening_stock: Math.max(0, Number(body.opening_stock ?? body.qty_on_hand) || 0),
+        qty_on_hand: Math.max(0, Number(body.opening_stock ?? body.qty_on_hand) || 0),
+        purchased_qty: 0,
+        sold_qty: 0,
       };
       products.unshift(np);
+      products = recalculateAllInventory(products, orders);
       setStored("products", products);
       syncProductToFirestore(np);
       return np;
@@ -342,15 +364,21 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
   const adjustStockMatch = p.match(/^\/products\/([^/]+)\/adjust-stock$/);
   if (adjustStockMatch && method === "POST") {
     const pid = adjustStockMatch[1];
-    const products = getStored<any[]>("products", SEED_PRODUCTS);
+    const orders = getStored<any[]>("orders", SEED_ORDERS);
+    let products = getStored<any[]>("products", SEED_PRODUCTS);
+    products = recalculateAllInventory(products, orders);
     const prod = products.find((pr) => pr.id === pid);
     if (!prod) throw new Error("Product not found: " + pid);
 
-    if (body.new_qty !== undefined && body.new_qty !== null && body.new_qty !== "") {
-      prod.qty_on_hand = Number(body.new_qty) || 0;
-    } else if (body.qty_delta !== undefined && body.qty_delta !== null) {
-      prod.qty_on_hand = (Number(prod.qty_on_hand) || 0) + (Number(body.qty_delta) || 0);
-    }
+    const targetQty = Math.max(0, body.new_qty !== undefined && body.new_qty !== null && body.new_qty !== ""
+      ? (Number(body.new_qty) || 0)
+      : ((Number(prod.qty_on_hand) || 0) + (Number(body.qty_delta) || 0)));
+
+    // Adjust opening stock so that opening + purchased - sold = targetQty
+    const netPurchasedMinusSold = (Number(prod.purchased_qty) || 0) - (Number(prod.sold_qty) || 0);
+    prod.opening_stock = Math.max(0, targetQty - netPurchasedMinusSold);
+    prod.qty_on_hand = targetQty;
+
     setStored("products", products);
     syncProductToFirestore(prod);
     return prod;
@@ -359,26 +387,32 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
   const pMatch = p.match(/^\/products\/([^/]+)$/);
   if (pMatch) {
     const pid = pMatch[1];
+    const orders = getStored<any[]>("orders", SEED_ORDERS);
     let products = getStored<any[]>("products", SEED_PRODUCTS);
     if (method === "PUT") {
       let updatedProd = null;
       products = products.map((item) => {
         if (item.id === pid) {
+          const opening = body.opening_stock !== undefined
+            ? Math.max(0, Number(body.opening_stock) || 0)
+            : (item.opening_stock || 0);
           updatedProd = {
             ...item,
             ...body,
             id: pid,
             cost_price: body.cost_price !== undefined ? Number(body.cost_price) : item.cost_price,
             sell_price: body.sell_price !== undefined ? Number(body.sell_price) : item.sell_price,
-            qty_on_hand: body.qty_on_hand !== undefined ? Number(body.qty_on_hand) : item.qty_on_hand,
+            opening_stock: opening,
           };
           return updatedProd;
         }
         return item;
       });
+      products = recalculateAllInventory(products, orders);
       setStored("products", products);
-      if (updatedProd) syncProductToFirestore(updatedProd);
-      return updatedProd || body;
+      const saved = products.find((item) => item.id === pid) || updatedProd;
+      if (saved) syncProductToFirestore(saved);
+      return saved;
     }
     if (method === "DELETE") {
       recordLocalDeletedId("products", pid);
@@ -483,21 +517,16 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
     if (method === "DELETE") {
       recordLocalDeletedId("orders", oid);
       let orders = getStored<any[]>("orders", SEED_ORDERS);
-      const target = orders.find((item) => item.id === oid);
-      if (target) {
-        // Reverse stock
-        const products = getStored<any[]>("products", SEED_PRODUCTS);
-        const mult = target.kind === "purchase" ? -1 : 1;
-        (target.items || []).forEach((it: any) => {
-          const prod = products.find((pr) => pr.id === it.product_id || pr.model === it.model);
-          if (prod) prod.qty_on_hand = (Number(prod.qty_on_hand) || 0) + mult * (Number(it.qty) || 0);
-        });
-        setStored("products", products);
-        syncProductsBatchToFirestore(products);
-      }
       orders = orders.filter((item) => item.id !== oid);
       setStored("orders", orders);
       deleteOrderFromFirestore(oid);
+
+      // Ledger-based inventory recomputation: Inventory = Purchases - Sales
+      const products = getStored<any[]>("products", SEED_PRODUCTS);
+      const updatedProducts = recalculateAllInventory(products, orders);
+      setStored("products", updatedProducts);
+      syncProductsBatchToFirestore(updatedProducts);
+
       return { ok: true };
     }
     // GET single order
@@ -589,8 +618,10 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
 
   // Dashboard & Reports
   if (p === "/dashboard" || p === "/reports") {
-    const products = getStored("products", SEED_PRODUCTS);
     const orders = getStored("orders", SEED_ORDERS);
+    let products = getStored<any[]>("products", SEED_PRODUCTS);
+    products = recalculateAllInventory(products, orders);
+    setStored("products", products);
     const expenses = getStored("expenses", SEED_EXPENSES);
 
     const sales = orders.filter((o) => o.kind === "sale");
@@ -615,12 +646,13 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
       return s + Math.max(0, o.total - paid);
     }, 0);
 
-    const inventory_value = products.reduce((s, p) => s + (p.qty_on_hand || 0) * (p.cost_price || 0), 0);
-    const units_in_stock = products.reduce((s, p) => s + (p.qty_on_hand || 0), 0);
+    const inventory_value = products.reduce((s, p) => s + Math.max(0, p.qty_on_hand || 0) * (p.cost_price || 0), 0);
+    const units_in_stock = products.reduce((s, p) => s + Math.max(0, p.qty_on_hand || 0), 0);
     const net_profit = total_sales - cogs - total_expenses;
 
-    const low_stock = products.filter((p) => (p.qty_on_hand || 0) >= 0 && (p.qty_on_hand || 0) <= 2);
-    const negative_stock = products.filter((p) => (p.qty_on_hand || 0) < 0);
+    const low_stock = products.filter((p) => (Number(p.qty_on_hand) || 0) > 0 && (Number(p.qty_on_hand) || 0) <= 2);
+    const out_of_stock = products.filter((p) => (Number(p.qty_on_hand) || 0) === 0);
+    const negative_stock = products.filter((p) => (Number(p.qty_on_hand) || 0) < 0);
 
     const recent_sales = sales.slice(0, 5).map((o) => {
       const paid = (o.payments || []).reduce((s: number, pm: any) => s + pm.amount, 0);
@@ -630,16 +662,21 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
     });
 
     // Available stock details for the dashboard
-    const available_stock = products.map((p) => ({
-      id: p.id,
-      model: p.model,
-      sku: p.sku || "",
-      category: p.category || "Television",
-      qty_on_hand: Number(p.qty_on_hand) || 0,
-      cost_price: Number(p.cost_price) || 0,
-      sell_price: Number(p.sell_price) || 0,
-      status: (Number(p.qty_on_hand) || 0) < 0 ? "negative" : (Number(p.qty_on_hand) || 0) <= 2 ? "low" : "available",
-    }));
+    const available_stock = products.map((p) => {
+      const q = Number(p.qty_on_hand) || 0;
+      return {
+        id: p.id,
+        model: p.model,
+        sku: p.sku || "",
+        category: p.category || "Television",
+        purchased_qty: Number((p as any).purchased_qty) || 0,
+        sold_qty: Number((p as any).sold_qty) || 0,
+        qty_on_hand: q,
+        cost_price: Number(p.cost_price) || 0,
+        sell_price: Number(p.sell_price) || 0,
+        status: q < 0 ? "negative" : q === 0 ? "out" : q <= 2 ? "low" : "available",
+      };
+    });
 
     const summary = {
       total_sales,

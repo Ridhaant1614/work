@@ -87,6 +87,11 @@ export default function Billing() {
     const p = products.find((x: any) => x.id === productId);
     if (!p) return;
 
+    const availableStock = Number(p.qty_on_hand) || 0;
+    if (availableStock <= 0) {
+      show(`Notice: ${p.model} is at ${availableStock} in godown. Billed quantity will reflect a deficit until purchase lot is entered.`, "info");
+    }
+
     setLines((prev) => {
       const existing = prev.find((l) => l.product_id === p.id);
       if (existing) {
@@ -103,7 +108,7 @@ export default function Billing() {
           qty: 1,
           rate: Number(p.sell_price) || Number(p.cost_price) || 0,
           cost: Number(p.cost_price) || 0,
-          stock: Number(p.qty_on_hand) || 0,
+          stock: availableStock,
         },
       ];
     });
@@ -155,6 +160,14 @@ export default function Billing() {
       }
       if (lines.length === 0) {
         throw new Error("Please add at least one product to the bill");
+      }
+
+      for (const l of lines) {
+        const prod = products.find((x: any) => x.id === l.product_id);
+        const avail = Number(prod?.qty_on_hand) || 0;
+        if (l.qty > avail) {
+          console.info(`Sale for ${l.model} exceeds on-hand stock (${avail} available). Will reflect deficit until purchase is recorded.`);
+        }
       }
 
       const isoDate = billDate
