@@ -4,6 +4,7 @@ import { apiGet, apiPost, apiPut, apiDelete } from "../api";
 import { Spinner, EmptyState, ConfirmModal } from "../ui";
 import { formatINR } from "../format";
 import { useToast } from "../toast";
+import { exportInventoryStockPdf } from "../inventoryPdf";
 
 type DraftProduct = {
   id?: string;
@@ -191,6 +192,22 @@ export default function Inventory() {
     editMutation.mutate();
   }
 
+  function handleExportPdf() {
+    const itemsToExport = filtered.length > 0 ? filtered : data;
+    if (itemsToExport.length === 0) {
+      show("No inventory items to export", "error");
+      return;
+    }
+    const success = exportInventoryStockPdf(itemsToExport);
+    if (!success) {
+      show("Popup blocked by browser. Please allow popups to export the stock PDF.", "error");
+    } else {
+      show(`Preparing PDF export for ${itemsToExport.length} models...`, "info");
+    }
+  }
+
+  const isFiltered = filtered.length !== data.length;
+
   return (
     <div>
       <div className="page-header">
@@ -198,7 +215,15 @@ export default function Inventory() {
           <h1>Inventory &amp; Stock Master</h1>
           <p>{data.length} models · {totalUnits} units in godown · {formatINR(totalValue)} inventory valuation</p>
         </div>
-        <div className="page-header-actions">
+        <div className="page-header-actions" style={{ display: "flex", gap: "var(--s2)", flexWrap: "wrap", alignItems: "center" }}>
+          <button
+            className="btn btn-outline btn-sm"
+            onClick={handleExportPdf}
+            title="Export inventory details (Model Name & In-Stock Quantity only) as PDF"
+            style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+          >
+            📄 {isFiltered ? `Export Stock PDF (${filtered.length})` : "Export Stock PDF"}
+          </button>
           <button className="btn btn-primary btn-sm" onClick={() => { setNewDraft(EMPTY_DRAFT); setOpenAdd(true); }}>
             + Add Inventory Item
           </button>

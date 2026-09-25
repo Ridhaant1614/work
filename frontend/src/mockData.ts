@@ -226,7 +226,7 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
     });
 
     const total = Math.round(items.reduce((s: number, it: any) => s + it.amount, 0) * 100) / 100;
-    const payments = [];
+    const payments: any[] = [];
     const initPay = Number(ordBody.initial_payment);
     if (initPay > 0) {
       payments.push({
@@ -799,7 +799,7 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
       top_model: "None",
     });
 
-    let mom_comparison = null;
+    let mom_comparison: any = null;
     if (monthly_breakdown.length >= 2) {
       const current = monthly_breakdown[monthly_breakdown.length - 1];
       const previous = monthly_breakdown[monthly_breakdown.length - 2];
