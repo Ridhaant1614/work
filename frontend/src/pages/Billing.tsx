@@ -13,6 +13,13 @@ import {
   COMPANY_DETAILS,
 } from "../receipt";
 import { WhatsAppModal } from "../WhatsAppModal";
+import {
+  formatFileSize,
+  readFileAsDataUrl,
+  compressImageIfNeeded,
+  saveInvoiceToIdb,
+  type InvoiceAttachment,
+} from "../invoiceStorage";
 
 type BillLine = {
   key: string;
@@ -48,6 +55,49 @@ export default function Billing() {
   // Dedicated WhatsApp prompt modal
   const [showWhatsAppModal, setShowWhatsAppModal] = useState(false);
   const [whatsAppModalBill, setWhatsAppModalBill] = useState<BillData | null>(null);
+
+  // Optional invoice file attachment during billing
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const [attachedFile, setAttachedFile] = useState<File | null>(null);
+  const [attachedAttachment, setAttachedAttachment] = useState<InvoiceAttachment | null>(null);
+
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    if (!e.target.files || e.target.files.length === 0) return;
+    const file = e.target.files[0];
+    const isPdf = file.name.toLowerCase().endsWith(".pdf");
+    const valid = file.type.startsWith("image/") || file.type === "application/pdf" || isPdf;
+    if (!valid) {
+      show("Please upload a PDF or image (JPG, PNG, WEBP)", "error");
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      show("File size exceeds 10MB limit", "error");
+      return;
+    }
+    setAttachedFile(file);
+    try {
+      let dataUrl = "";
+      let finalSize = file.size;
+      if (file.type.startsWith("image/")) {
+        const compressed = await compressImageIfNeeded(file);
+        dataUrl = compressed.dataUrl;
+        finalSize = compressed.size;
+      } else {
+        dataUrl = await readFileAsDataUrl(file);
+      }
+      const att: InvoiceAttachment = {
+        name: file.name,
+        type: file.type || (isPdf ? "application/pdf" : "image/jpeg"),
+        size: finalSize,
+        data_url: dataUrl,
+        uploaded_at: new Date().toISOString(),
+      };
+      setAttachedAttachment(att);
+      show(`Invoice "${file.name}" attached`, "info");
+    } catch {
+      show("Failed to process file", "error");
+    }
+  }
 
   const { data: products = [] } = useQuery({
     queryKey: ["products"],
@@ -189,6 +239,7 @@ export default function Billing() {
         credit_days: creditDays,
         due_date: dueDateIso,
         notes: `${notes.trim()}${payMethod ? ` [Payment: ${payMethod}]` : ""}${effectivePhone ? ` [Phone: ${effectivePhone}]` : ""}`,
+        invoice_file: attachedAttachment || null,
         items: lines.map((l) => ({
           product_id: l.product_id,
           model: l.model,
@@ -201,6 +252,9 @@ export default function Billing() {
       };
 
       const res = await apiPost("/sales", orderBody);
+      if (attachedAttachment && res?.id) {
+        await saveInvoiceToIdb(res.id, attachedAttachment);
+      }
 
       const billData: BillData = {
         refNo: res.ref_no || refNo,
@@ -651,6 +705,71 @@ export default function Billing() {
                 onChange={(e) => setNotes(e.target.value)}
                 placeholder="Remarks or warranty terms"
               />
+            </div>
+
+            {/* Attach Scanned Invoice / Bill (Optional) */}
+            <div className="field">
+              <label style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span>Attach Invoice Copy / Challan (Optional)</span>
+                {attachedFile && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs"
+                    style={{ color: "var(--error)", padding: 0 }}
+                    onClick={() => { setAttachedFile(null); setAttachedAttachment(null); }}
+                  >
+                    ✕ Remove
+                  </button>
+                )}
+              </label>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".pdf,image/png,image/jpeg,image/webp,image/jpg"
+                style={{ display: "none" }}
+                onChange={handleFileChange}
+              />
+              {attachedFile ? (
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    padding: "8px 12px",
+                    background: "var(--surface-2)",
+                    borderRadius: "var(--r-sm)",
+                    border: "1px solid var(--border)",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                    <span style={{ fontSize: 20 }}>
+                      {attachedFile.name.toLowerCase().endsWith(".pdf") ? "📄" : "🖼️"}
+                    </span>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {attachedFile.name}
+                      </div>
+                      <div style={{ fontSize: 11, color: "var(--muted)" }}>{formatFileSize(attachedFile.size)}</div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-xs"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    Change
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm"
+                  style={{ width: "100%", justifyContent: "center", borderStyle: "dashed" }}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  📎 Attach Signed Invoice or Delivery Challan (PDF / Image)
+                </button>
+              )}
             </div>
           </div>
         </div>

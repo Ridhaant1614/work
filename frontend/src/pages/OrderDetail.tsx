@@ -7,6 +7,9 @@ import { formatINR, formatDate, formatDateTime } from "../format";
 import { useToast } from "../toast";
 import { type BillData, printTaxInvoice } from "../receipt";
 import { WhatsAppModal } from "../WhatsAppModal";
+import { InvoiceViewerModal } from "../InvoiceViewerModal";
+import { InvoiceUploadModal } from "../InvoiceUploadModal";
+import { formatFileSize } from "../invoiceStorage";
 
 type Kind = "sale" | "purchase";
 
@@ -42,6 +45,10 @@ export default function OrderDetail({ kind }: { kind: Kind }) {
   const [editAmount, setEditAmount] = useState("");
   const [editNote, setEditNote] = useState("");
   const [deletePaymentId, setDeletePaymentId] = useState<string | null>(null);
+
+  // Invoice attachment states
+  const [showInvoiceViewer, setShowInvoiceViewer] = useState(false);
+  const [showInvoiceUpload, setShowInvoiceUpload] = useState(false);
 
   const { data: o, isLoading, isError, refetch } = useQuery({
     queryKey: [listKey, id],
@@ -258,6 +265,25 @@ export default function OrderDetail({ kind }: { kind: Kind }) {
               📅 Credit Terms ({o.credit_days ?? 15}d)
             </button>
           )}
+          {/* View / Upload Invoice Action */}
+          {isSale && (
+            o.invoice_file ? (
+              <button
+                className="btn btn-outline btn-sm"
+                style={{ borderColor: "var(--brand)", color: "var(--brand)", fontWeight: 700 }}
+                onClick={() => setShowInvoiceViewer(true)}
+              >
+                📄 View Invoice
+              </button>
+            ) : (
+              <button
+                className="btn btn-outline btn-sm"
+                onClick={() => setShowInvoiceUpload(true)}
+              >
+                📤 Upload Invoice
+              </button>
+            )
+          )}
           {/* Change Status Action */}
           <button className="btn btn-outline btn-sm" onClick={openStatusModal}>
             ✏️ Change Status
@@ -362,6 +388,105 @@ export default function OrderDetail({ kind }: { kind: Kind }) {
               </div>
             )}
           </div>
+
+          {/* Attached Invoice Document Card */}
+          {isSale && (
+            <div className="card" style={{ display: "flex", flexDirection: "column", gap: "var(--s3)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ fontWeight: 800, fontSize: 16, display: "flex", alignItems: "center", gap: 8 }}>
+                  <span>📄</span>
+                  <span>Attached Invoice Document</span>
+                </div>
+                {o.invoice_file ? (
+                  <span className="badge badge-success" style={{ fontSize: 11, padding: "3px 8px" }}>
+                    ✓ Document Attached
+                  </span>
+                ) : (
+                  <span className="badge" style={{ background: "var(--surface-2)", color: "var(--muted)", fontSize: 11, padding: "3px 8px" }}>
+                    No file attached
+                  </span>
+                )}
+              </div>
+
+              {o.invoice_file ? (
+                <div
+                  style={{
+                    background: "var(--surface-2)",
+                    border: "1px solid var(--border)",
+                    borderRadius: "var(--r-md)",
+                    padding: "var(--s3) var(--s4)",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "var(--s3)",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+                      <span style={{ fontSize: 32 }}>
+                        {o.invoice_file.name?.toLowerCase().endsWith(".pdf") || o.invoice_file.type?.includes("pdf") ? "📄" : "🖼️"}
+                      </span>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontWeight: 700, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {o.invoice_file.name}
+                        </div>
+                        <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
+                          {formatFileSize(o.invoice_file.size)}
+                          {o.invoice_file.uploaded_at && ` · Attached ${formatDateTime(o.invoice_file.uploaded_at)}`}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ display: "flex", gap: "var(--s2)", flexWrap: "wrap" }}>
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        onClick={() => setShowInvoiceViewer(true)}
+                        style={{ display: "flex", alignItems: "center", gap: 6 }}
+                      >
+                        👁️ View Invoice
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-outline btn-sm"
+                        onClick={() => setShowInvoiceUpload(true)}
+                        title="Upload a new replacement invoice"
+                      >
+                        🔄 Replace
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div
+                  style={{
+                    border: "1px dashed var(--border)",
+                    borderRadius: "var(--r-md)",
+                    padding: "var(--s4)",
+                    textAlign: "center",
+                    background: "var(--surface-2)",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    gap: 6,
+                  }}
+                >
+                  <div style={{ fontSize: 32, color: "var(--brand)" }}>📤</div>
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>No invoice file attached yet</div>
+                  <div style={{ fontSize: 12, color: "var(--muted)", maxWidth: 380 }}>
+                    Upload signed tax invoice copy, delivery challan, or scanned bill (PDF or image) for quick reference.
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-sm"
+                    style={{ marginTop: 6 }}
+                    onClick={() => setShowInvoiceUpload(true)}
+                  >
+                    📤 Upload Invoice Document
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Line Items Table */}
           <div className="card" style={{ display: "flex", flexDirection: "column", gap: "var(--s3)" }}>
@@ -795,6 +920,34 @@ export default function OrderDetail({ kind }: { kind: Kind }) {
         onClose={() => setShowWhatsAppModal(false)}
         bill={whatsAppBill}
       />
+
+      {/* Invoice Viewer Modal */}
+      {showInvoiceViewer && o && (
+        <InvoiceViewerModal
+          order={o}
+          onClose={() => setShowInvoiceViewer(false)}
+          onInvoiceUpdated={() => {
+            invalidateAll();
+            refetch();
+          }}
+          onOpenReplace={() => {
+            setShowInvoiceViewer(false);
+            setShowInvoiceUpload(true);
+          }}
+        />
+      )}
+
+      {/* Invoice Upload / Replace Modal */}
+      {showInvoiceUpload && o && (
+        <InvoiceUploadModal
+          order={o}
+          onClose={() => setShowInvoiceUpload(false)}
+          onSuccess={() => {
+            invalidateAll();
+            refetch();
+          }}
+        />
+      )}
     </div>
   );
 }

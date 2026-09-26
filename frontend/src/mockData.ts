@@ -286,6 +286,7 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
       items,
       total,
       payments,
+      invoice_file: ordBody.invoice_file || null,
       created_at: new Date().toISOString(),
     };
 
@@ -357,6 +358,7 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
       credit_days: newCreditDays,
       due_date: newDueDate,
       notes: ordBody.notes !== undefined ? ordBody.notes : existing.notes,
+      invoice_file: ordBody.invoice_file !== undefined ? ordBody.invoice_file : (existing.invoice_file || null),
       items: newItems,
       total,
       payments,
@@ -676,6 +678,33 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
     setStored("orders", orders);
     syncOrderToFirestore(o);
     return serializeOrder(o);
+  }
+
+  // Upload or Delete Invoice: /(orders|purchases|sales)/:id/invoice
+  const invoiceMatch = p.match(/^\/(orders|purchases|sales)\/([^/]+)\/invoice$/);
+  if (invoiceMatch) {
+    const oid = invoiceMatch[2];
+    const orders = getStored<any[]>("orders", SEED_ORDERS);
+    const o = orders.find((item) => item.id === oid);
+    if (!o) throw new Error("Order not found: " + oid);
+
+    if (method === "POST" || method === "PUT" || method === "PATCH") {
+      o.invoice_file = body?.invoice_file !== undefined ? body.invoice_file : body;
+      o.updated_at = new Date().toISOString();
+      setStored("orders", orders);
+      syncOrderToFirestore(o);
+      return serializeOrder(o);
+    }
+    if (method === "DELETE") {
+      o.invoice_file = null;
+      o.updated_at = new Date().toISOString();
+      setStored("orders", orders);
+      syncOrderToFirestore(o);
+      return serializeOrder(o);
+    }
+    if (method === "GET") {
+      return o.invoice_file || null;
+    }
   }
 
   // Dashboard & Reports

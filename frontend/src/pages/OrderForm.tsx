@@ -5,6 +5,13 @@ import { apiGet, apiPost, apiPut } from "../api";
 import { Spinner } from "../ui";
 import { formatINR, toInputDate, combineDateWithCurrentTime } from "../format";
 import { useToast } from "../toast";
+import {
+  formatFileSize,
+  readFileAsDataUrl,
+  compressImageIfNeeded,
+  saveInvoiceToIdb,
+  type InvoiceAttachment,
+} from "../invoiceStorage";
 
 type Line = { key: string; product_id: string; model: string; qty: string; rate: string };
 type Kind = "sale" | "purchase";
@@ -31,6 +38,49 @@ export default function OrderForm({ kind }: { kind: Kind }) {
   const [payMethod, setPayMethod] = useState("RTGS");
   const [lines, setLines] = useState<Line[]>([]);
 
+  // Optional invoice file attachment
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const [attachedFile, setAttachedFile] = useState<File | null>(null);
+  const [attachedAttachment, setAttachedAttachment] = useState<InvoiceAttachment | null>(null);
+
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    if (!e.target.files || e.target.files.length === 0) return;
+    const file = e.target.files[0];
+    const isPdf = file.name.toLowerCase().endsWith(".pdf");
+    const valid = file.type.startsWith("image/") || file.type === "application/pdf" || isPdf;
+    if (!valid) {
+      show("Please upload a PDF or image (JPG, PNG, WEBP)", "error");
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      show("File size exceeds 10MB limit", "error");
+      return;
+    }
+    setAttachedFile(file);
+    try {
+      let dataUrl = "";
+      let finalSize = file.size;
+      if (file.type.startsWith("image/")) {
+        const compressed = await compressImageIfNeeded(file);
+        dataUrl = compressed.dataUrl;
+        finalSize = compressed.size;
+      } else {
+        dataUrl = await readFileAsDataUrl(file);
+      }
+      const att: InvoiceAttachment = {
+        name: file.name,
+        type: file.type || (isPdf ? "application/pdf" : "image/jpeg"),
+        size: finalSize,
+        data_url: dataUrl,
+        uploaded_at: new Date().toISOString(),
+      };
+      setAttachedAttachment(att);
+      show(`Invoice "${file.name}" attached`, "info");
+    } catch {
+      show("Failed to process file", "error");
+    }
+  }
+
   const { data: products = [] } = useQuery({ queryKey: ["products"], queryFn: () => apiGet<any[]>("/products") });
   const { data: dealers = [] } = useQuery({ queryKey: ["dealers"], queryFn: () => apiGet<any[]>("/dealers"), enabled: isSale });
   const { data: existing, isLoading: loadingExisting } = useQuery({
@@ -49,6 +99,9 @@ export default function OrderForm({ kind }: { kind: Kind }) {
       if (existing.credit_days !== undefined && existing.credit_days !== null) {
         setCreditDays(Number(existing.credit_days) || 0);
       }
+      if (existing.invoice_file) {
+        setAttachedAttachment(existing.invoice_file);
+      }
       const curStatus = existing.pay_status === "cleared" ? "cleared" : (existing.amount_paid > 0 || existing.paid > 0) ? "partial" : "unpaid";
       setPayStatus(curStatus);
       setAmountPaid(String(existing.amount_paid ?? existing.paid ?? ""));
@@ -65,7 +118,7 @@ export default function OrderForm({ kind }: { kind: Kind }) {
   const total = lines.reduce((s, l) => s + (parseFloat(l.qty) || 0) * (parseFloat(l.rate) || 0), 0);
 
   const mutation = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       const isoDate = combineDateWithCurrentTime(orderDate);
       const calculatedPaid = payStatus === "cleared" ? total : payStatus === "unpaid" ? 0 : parseFloat(amountPaid) || 0;
       const paymentTag = payStatus !== "unpaid" ? `[Payment: ${payMethod}]` : "";
@@ -79,12 +132,17 @@ export default function OrderForm({ kind }: { kind: Kind }) {
         notes: finalNotes,
         date: isoDate,
         credit_days: isSale ? Math.max(0, parseInt(String(creditDays)) || 0) : undefined,
+        invoice_file: isSale ? (attachedAttachment || (existing?.invoice_file || null)) : undefined,
         items: lines.map(l => ({ product_id: l.product_id, model: l.model, qty: parseFloat(l.qty) || 0, rate: parseFloat(l.rate) || 0 })),
         payment_status: payStatus,
         amount_paid: calculatedPaid,
         initial_payment: calculatedPaid,
       };
-      return isEdit ? apiPut(`/orders/${editId}`, body) : apiPost(isSale ? "/sales" : "/purchases", body);
+      const res = await (isEdit ? apiPut(`/orders/${editId}`, body) : apiPost(isSale ? "/sales" : "/purchases", body));
+      if (attachedAttachment && (res?.id || editId)) {
+        await saveInvoiceToIdb(res?.id || editId, attachedAttachment);
+      }
+      return res;
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: [isSale ? "sales" : "purchases"] });
@@ -250,6 +308,73 @@ export default function OrderForm({ kind }: { kind: Kind }) {
             <label>Notes (optional)</label>
             <textarea className="input" value={notes} onChange={e => setNotes(e.target.value)} placeholder="Any remarks…" rows={2} />
           </div>
+
+          {/* Attach Invoice Document for Sales */}
+          {isSale && (
+            <div className="field">
+              <label style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span>Attach Invoice Copy / Challan (Optional)</span>
+                {attachedAttachment && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs"
+                    style={{ color: "var(--error)", padding: 0 }}
+                    onClick={() => { setAttachedFile(null); setAttachedAttachment(null); }}
+                  >
+                    ✕ Remove File
+                  </button>
+                )}
+              </label>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".pdf,image/png,image/jpeg,image/webp,image/jpg"
+                style={{ display: "none" }}
+                onChange={handleFileChange}
+              />
+              {attachedAttachment ? (
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    padding: "8px 12px",
+                    background: "var(--surface-2)",
+                    borderRadius: "var(--r-sm)",
+                    border: "1px solid var(--border)",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                    <span style={{ fontSize: 20 }}>
+                      {attachedAttachment.name.toLowerCase().endsWith(".pdf") ? "📄" : "🖼️"}
+                    </span>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {attachedAttachment.name}
+                      </div>
+                      <div style={{ fontSize: 11, color: "var(--muted)" }}>{formatFileSize(attachedAttachment.size)}</div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-xs"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    Change
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm"
+                  style={{ width: "100%", justifyContent: "center", borderStyle: "dashed" }}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  📎 Attach Signed Invoice or Delivery Challan (PDF / Image)
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Line Items */}

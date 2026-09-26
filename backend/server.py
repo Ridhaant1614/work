@@ -119,6 +119,7 @@ class OrderIn(BaseModel):
     payment_status: Optional[str] = None  # "cleared" | "unpaid" | "partial"
     amount_paid: Optional[float] = None
     credit_days: Optional[int] = 15
+    invoice_file: Optional[dict] = None
 
 
 class PaymentIn(BaseModel):
@@ -146,6 +147,7 @@ class OrderEdit(BaseModel):
     party_name: Optional[str] = None
     notes: Optional[str] = None
     credit_days: Optional[int] = None
+    invoice_file: Optional[dict] = None
 
 
 class CreditDaysIn(BaseModel):
@@ -461,6 +463,7 @@ async def _create_order(kind: str, body: OrderIn):
            "date": date_str, "credit_days": credit_days, "due_date": due_date,
            "notes": body.notes or "",
            "items": items, "total": total, "payments": payments,
+           "invoice_file": body.invoice_file or None,
            "deleted_at": None, "created_at": now_iso()}
     await db.orders.insert_one(doc)
     await _adjust_inventory(items, +1 if kind == "purchase" else -1)
@@ -490,6 +493,8 @@ async def _update_order(oid: str, body: OrderIn):
     changes = {"party_id": body.party_id, "party_name": body.party_name,
                "ref_no": body.ref_no, "date": body.date or existing.get("date"),
                "notes": body.notes or "", "items": items, "total": round(total, 2)}
+    if body.invoice_file is not None:
+        changes["invoice_file"] = body.invoice_file
     if body.credit_days is not None:
         c_days = max(0, body.credit_days)
         changes["credit_days"] = c_days
@@ -679,6 +684,28 @@ async def update_order_credit_days(oid: str, body: CreditDaysIn, user=Depends(cu
     except Exception:
         due_date = None
     await db.orders.update_one({"id": oid}, {"$set": {"credit_days": days, "due_date": due_date}})
+    updated_o = await db.orders.find_one({"id": oid})
+    return serialize_order(updated_o)
+
+
+@api_router.post("/orders/{oid}/invoice")
+@api_router.patch("/orders/{oid}/invoice")
+async def upload_order_invoice(oid: str, body: dict = Body(...), user=Depends(current_user)):
+    o = await db.orders.find_one({"id": oid, "deleted_at": None})
+    if not o:
+        raise HTTPException(404, "Order not found")
+    inv = body.get("invoice_file") if isinstance(body, dict) and "invoice_file" in body else body
+    await db.orders.update_one({"id": oid}, {"$set": {"invoice_file": inv, "updated_at": now_iso()}})
+    updated_o = await db.orders.find_one({"id": oid})
+    return serialize_order(updated_o)
+
+
+@api_router.delete("/orders/{oid}/invoice")
+async def delete_order_invoice(oid: str, user=Depends(current_user)):
+    o = await db.orders.find_one({"id": oid, "deleted_at": None})
+    if not o:
+        raise HTTPException(404, "Order not found")
+    await db.orders.update_one({"id": oid}, {"$set": {"invoice_file": None, "updated_at": now_iso()}})
     updated_o = await db.orders.find_one({"id": oid})
     return serialize_order(updated_o)
 

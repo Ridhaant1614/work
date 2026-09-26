@@ -7,6 +7,8 @@ import { formatINR, formatDate, formatTime, shortDate } from "../format";
 import { useToast } from "../toast";
 import { type BillData, printTaxInvoice } from "../receipt";
 import { WhatsAppModal } from "../WhatsAppModal";
+import { InvoiceViewerModal } from "../InvoiceViewerModal";
+import { InvoiceUploadModal } from "../InvoiceUploadModal";
 
 type Kind = "sale" | "purchase";
 
@@ -31,6 +33,10 @@ export default function OrderList({ kind, title }: OrderListProps) {
   // Quick credit days change state
   const [creditOrder, setCreditOrder] = useState<any | null>(null);
   const [creditDaysInput, setCreditDaysInput] = useState<number>(15);
+
+  // Quick invoice viewing and uploading states
+  const [viewingInvoiceOrder, setViewingInvoiceOrder] = useState<any | null>(null);
+  const [uploadingInvoiceOrder, setUploadingInvoiceOrder] = useState<any | null>(null);
 
   function handleWhatsApp(o: any) {
     const phoneMatch = o.notes?.match(/\[Phone:\s*([+0-9\s-]+)\]/i);
@@ -207,6 +213,7 @@ export default function OrderList({ kind, title }: OrderListProps) {
                   <th className="hide-mobile">Ref No.</th>
                   <th className="hide-mobile">Date</th>
                   {kind === "sale" && <th>Credit / Due Terms</th>}
+                  {kind === "sale" && <th>Invoice Doc</th>}
                   <th style={{ textAlign: "right" }}>Total</th>
                   <th className="hide-mobile" style={{ textAlign: "right" }}>Paid</th>
                   <th className="hide-mobile" style={{ textAlign: "right" }}>Balance</th>
@@ -225,7 +232,7 @@ export default function OrderList({ kind, title }: OrderListProps) {
                         {o.balance > 0 && <span style={{ color: "var(--error)", marginLeft: 6, fontWeight: 600 }}>Bal: {formatINR(o.balance)}</span>}
                       </div>
                       {kind === "sale" && (
-                        <div className="show-mobile" style={{ marginTop: 4 }}>
+                        <div className="show-mobile" style={{ marginTop: 4, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
                           {o.is_due_passed ? (
                             <span className="badge" style={{ background: "#fee2e2", color: "#dc2626", border: "1px solid #f87171", fontWeight: 800, fontSize: 11 }}>
                               🔴 Due date passed ({Math.abs(o.days_left)}d overdue)
@@ -235,6 +242,15 @@ export default function OrderList({ kind, title }: OrderListProps) {
                           ) : (
                             <span style={{ fontSize: 11, color: o.days_left <= 3 ? "var(--warning)" : "var(--muted)", fontWeight: 600 }}>
                               ⏳ {o.days_left}d left · Due {shortDate(o.due_date)}
+                            </span>
+                          )}
+                          {o.invoice_file && (
+                            <span
+                              className="badge badge-brand"
+                              style={{ fontSize: 10, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 3 }}
+                              onClick={(e) => { e.stopPropagation(); setViewingInvoiceOrder(o); }}
+                            >
+                              📄 Invoice Attached
                             </span>
                           )}
                         </div>
@@ -279,6 +295,49 @@ export default function OrderList({ kind, title }: OrderListProps) {
                             </span>
                           )}
                         </div>
+                      </td>
+                    )}
+                    {kind === "sale" && (
+                      <td onClick={(e) => e.stopPropagation()} style={{ whiteSpace: "nowrap" }}>
+                        {o.invoice_file ? (
+                          <button
+                            type="button"
+                            className="btn btn-outline btn-xs"
+                            style={{
+                              borderColor: "var(--brand)",
+                              color: "var(--brand)",
+                              fontWeight: 700,
+                              fontSize: 11,
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 4,
+                              padding: "3px 8px",
+                            }}
+                            onClick={() => setViewingInvoiceOrder(o)}
+                            title={`Click to view attached invoice: ${o.invoice_file.name}`}
+                          >
+                            <span>📄</span>
+                            <span>View</span>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-xs"
+                            style={{
+                              color: "var(--muted)",
+                              fontSize: 11,
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 3,
+                              padding: "2px 6px",
+                            }}
+                            onClick={() => setUploadingInvoiceOrder(o)}
+                            title="Attach invoice copy (PDF / Image)"
+                          >
+                            <span>📤</span>
+                            <span>+ Attach</span>
+                          </button>
+                        )}
                       </td>
                     )}
                     <td style={{ textAlign: "right", fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{formatINR(o.total)}</td>
@@ -509,6 +568,35 @@ export default function OrderList({ kind, title }: OrderListProps) {
         onClose={() => setShowWhatsAppModal(false)}
         bill={whatsAppBill}
       />
+
+      {/* Invoice Viewer Modal */}
+      {viewingInvoiceOrder && (
+        <InvoiceViewerModal
+          order={viewingInvoiceOrder}
+          onClose={() => setViewingInvoiceOrder(null)}
+          onInvoiceUpdated={() => {
+            qc.invalidateQueries({ queryKey: [kind === "sale" ? "sales" : "purchases"] });
+            setViewingInvoiceOrder(null);
+          }}
+          onOpenReplace={() => {
+            const ord = viewingInvoiceOrder;
+            setViewingInvoiceOrder(null);
+            setUploadingInvoiceOrder(ord);
+          }}
+        />
+      )}
+
+      {/* Invoice Upload Modal */}
+      {uploadingInvoiceOrder && (
+        <InvoiceUploadModal
+          order={uploadingInvoiceOrder}
+          onClose={() => setUploadingInvoiceOrder(null)}
+          onSuccess={() => {
+            qc.invalidateQueries({ queryKey: [kind === "sale" ? "sales" : "purchases"] });
+            setUploadingInvoiceOrder(null);
+          }}
+        />
+      )}
 
       <button className="fab" onClick={() => navigate(createRoute)} title={`New ${kind}`}>+</button>
     </div>
