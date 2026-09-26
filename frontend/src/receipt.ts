@@ -25,6 +25,10 @@ export interface BillData {
   payMethod?: string;
   notes?: string;
   isPurchase?: boolean;
+  creditDays?: number;
+  dueDate?: string;
+  daysLeft?: number;
+  isDuePassed?: boolean;
   supplierName?: string;
   supplierAddress?: string;
   supplierGstin?: string;
@@ -77,6 +81,8 @@ export function generateWhatsAppBillText(bill: BillData): string {
     "══════════════════════════",
     `🧾 *${isPur ? "PURCHASE ORDER" : "TAX INVOICE"}: ${bill.refNo || "SE/INV"}*`,
     `📅 Date: ${dateStr}`,
+    bill.creditDays !== undefined && !isPur ? `⏳ Credit Terms: *${bill.creditDays} Days*` : null,
+    bill.dueDate && !isPur ? `📅 Due Date: *${formatDate(bill.dueDate)}*${bill.isDuePassed ? " 🔴 *(Due Date Passed)*" : bill.daysLeft !== undefined && bill.balance > 0.5 ? ` (${bill.daysLeft} days left)` : ""}` : null,
     `👤 ${isPur ? "Supplier" : "Buyer/Dealer"}: *${bill.customerName || "Counter Sale"}*`,
     bill.customerGstin ? `🏛️ GSTIN: ${bill.customerGstin}` : null,
     bill.customerAddress ? `📍 ${bill.customerAddress}` : null,
@@ -347,7 +353,7 @@ export function renderTaxInvoiceHtml(bill: BillData): string {
               </td>
               <td style="border-right: none; padding: 4px 6px;">
                 <div style="color: #444; font-size: 9.5px;">Mode/Terms of Payment</div>
-                <div class="bold">${bill.payMethod || "RTGS / Bank Transfer"}</div>
+                <div class="bold">${bill.payMethod || "RTGS / Bank Transfer"}${bill.creditDays !== undefined && !bill.isPurchase ? ` (${bill.creditDays}d Credit)` : ""}</div>
               </td>
             </tr>
             <tr>
@@ -356,8 +362,8 @@ export function renderTaxInvoiceHtml(bill: BillData): string {
                 <div>—</div>
               </td>
               <td style="border-right: none; padding: 4px 6px;">
-                <div style="color: #444; font-size: 9.5px;">Other Reference(s)</div>
-                <div>—</div>
+                <div style="color: #444; font-size: 9.5px;">${bill.dueDate ? "Payment Due Date" : "Other Reference(s)"}</div>
+                <div class="bold" style="${bill.isDuePassed ? 'color: #dc2626;' : ''}">${bill.dueDate ? formatDate(bill.dueDate) : "—"}${bill.isDuePassed ? " (Overdue)" : ""}</div>
               </td>
             </tr>
             <tr>

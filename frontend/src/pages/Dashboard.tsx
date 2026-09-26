@@ -11,6 +11,7 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const [stockSearch, setStockSearch] = useState("");
   const [stockStatusFilter, setStockStatusFilter] = useState<"all" | "in" | "low" | "out" | "negative">("all");
+  const [selectedGstMonth, setSelectedGstMonth] = useState<string>("all");
 
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["dashboard"],
@@ -52,9 +53,40 @@ export default function Dashboard() {
   const outCount = availableStockList.filter((p: any) => p.qty_on_hand === 0).length;
   const negativeCount = availableStockList.filter((p: any) => p.qty_on_hand < 0).length;
 
+  const totalSales = Number(data.total_sales) || 0;
+  const totalPurchases = Number(data.total_purchases) || 0;
+  const netProfitPreGst = Number(data.net_profit_before_gst ?? data.net_profit) || 0;
+  const totalGstPayable = Number(data.gst_payable ?? data.total_gst_payable ?? Math.max(0, (totalSales - totalPurchases) * 0.18)) || 0;
+  const netProfitPostGst = Number(data.net_profit_after_gst ?? (netProfitPreGst - totalGstPayable)) || 0;
+  const monthlyGstList: any[] = data.monthly_gst_breakdown || data.monthly_breakdown || [];
+
   const kpis = [
-    { label: "Total Sales", value: formatINRCompact(data.total_sales), icon: "📈", color: "var(--brand)", bg: "var(--brand-ter)" },
-    { label: "Net Profit", value: formatINRCompact(data.net_profit), icon: "💹", color: data.net_profit >= 0 ? "var(--success)" : "var(--error)", bg: data.net_profit >= 0 ? "var(--success-bg)" : "var(--error-bg)" },
+    { label: "Total Sales", value: formatINRCompact(totalSales), icon: "📈", color: "var(--brand)", bg: "var(--brand-ter)" },
+    {
+      label: "Net Profit (Pre-GST)",
+      value: formatINRCompact(netProfitPreGst),
+      icon: "💹",
+      color: netProfitPreGst >= 0 ? "var(--success)" : "var(--error)",
+      bg: netProfitPreGst >= 0 ? "var(--success-bg)" : "var(--error-bg)",
+      subtitle: `Before 18% GST`,
+    },
+    {
+      label: "GST Payable (18%)",
+      value: formatINRCompact(totalGstPayable),
+      icon: "🏛️",
+      color: "#d97706",
+      bg: "rgba(245, 158, 11, 0.15)",
+      subtitle: `(Sales - Purchases) × 18%`,
+      badge: "18% GST",
+    },
+    {
+      label: "Net Profit (After GST)",
+      value: formatINRCompact(netProfitPostGst),
+      icon: "💼",
+      color: netProfitPostGst >= 0 ? "var(--brand)" : "var(--error)",
+      bg: "var(--brand-ter)",
+      subtitle: `Net Profit - GST Payable`,
+    },
     { label: "Receivable", value: formatINRCompact(data.receivable), icon: "💰", color: "var(--info)", bg: "var(--info-bg)" },
     { label: "Payable", value: formatINRCompact(data.payable), icon: "🧾", color: "var(--warning)", bg: "var(--warning-bg)" },
     { label: "Inventory Value", value: formatINRCompact(data.inventory_value), icon: "📦", color: "var(--on-surface-2)", bg: "var(--surface-3)" },
@@ -101,8 +133,155 @@ export default function Dashboard() {
                 <span>{k.label}</span>
                 {k.badge && <span style={{ fontSize: 11, color: "var(--error)", fontWeight: 700 }}>{k.badge}</span>}
               </div>
+              {(k as any).subtitle && (
+                <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2, fontWeight: 500 }}>
+                  {(k as any).subtitle}
+                </div>
+              )}
             </div>
           ))}
+        </div>
+
+        {/* Net Profit & GST Deduction Card */}
+        <div className="card" style={{ background: "linear-gradient(135deg, var(--surface) 0%, var(--surface-2) 100%)", border: "1px solid var(--border)" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "var(--s3)", borderBottom: "1px solid var(--divider)", paddingBottom: "var(--s3)", marginBottom: "var(--s3)" }}>
+            <div>
+              <h2 style={{ fontSize: 16, fontWeight: 800, margin: 0 }}>🏛️ Net Profit After GST Deduction</h2>
+              <p style={{ fontSize: 13, color: "var(--muted)", margin: "2px 0 0 0" }}>
+                Formula: <strong>Net Profit after GST = Net Profit - GST Payable</strong> · GST Payable = (Net Sales - Net Purchase) × 18%
+              </p>
+            </div>
+            <div style={{ display: "flex", gap: "var(--s2)", alignItems: "center" }}>
+              <span className="badge badge-brand" style={{ fontWeight: 800, padding: "4px 10px", fontSize: 12 }}>
+                18% GST Rate
+              </span>
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "var(--s4)" }}>
+            <div style={{ padding: "var(--s4)", background: "var(--surface)", borderRadius: "var(--r-md)", border: "1px solid var(--border)" }}>
+              <div style={{ fontSize: 11, color: "var(--muted)", fontWeight: 700, textTransform: "uppercase" }}>1. Net Profit (Pre-GST)</div>
+              <div style={{ fontSize: 24, fontWeight: 800, color: netProfitPreGst >= 0 ? "var(--success)" : "var(--error)", marginTop: 4 }}>
+                {formatINR(netProfitPreGst)}
+              </div>
+              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>Total Sales minus COGS &amp; Operating Expenses</div>
+            </div>
+
+            <div style={{ padding: "var(--s4)", background: "var(--surface)", borderRadius: "var(--r-md)", border: "1px solid var(--border)" }}>
+              <div style={{ fontSize: 11, color: "var(--muted)", fontWeight: 700, textTransform: "uppercase" }}>2. GST Payable (18%)</div>
+              <div style={{ fontSize: 24, fontWeight: 800, color: "#d97706", marginTop: 4 }}>
+                - {formatINR(totalGstPayable)}
+              </div>
+              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>(Sales {formatINRCompact(totalSales)} - Purchases {formatINRCompact(totalPurchases)}) × 18%</div>
+            </div>
+
+            <div style={{ padding: "var(--s4)", background: netProfitPostGst >= 0 ? "rgba(16, 185, 129, 0.08)" : "rgba(239, 68, 68, 0.08)", borderRadius: "var(--r-md)", border: netProfitPostGst >= 0 ? "1px solid rgba(16, 185, 129, 0.4)" : "1px solid rgba(239, 68, 68, 0.4)" }}>
+              <div style={{ fontSize: 11, color: netProfitPostGst >= 0 ? "var(--success)" : "var(--error)", fontWeight: 700, textTransform: "uppercase" }}>3. Net Profit (After GST)</div>
+              <div style={{ fontSize: 26, fontWeight: 900, color: netProfitPostGst >= 0 ? "var(--success)" : "var(--error)", marginTop: 4 }}>
+                {formatINR(netProfitPostGst)}
+              </div>
+              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>Subtracted from Net Profit for true distributable earnings</div>
+            </div>
+          </div>
+        </div>
+
+        {/* MONTHLY GST BREAKDOWN SECTION */}
+        <div className="card">
+          <div className="card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "var(--s3)" }}>
+            <div>
+              <h2 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>📊 Monthly GST Overview (Different for Each Month)</h2>
+              <p style={{ color: "var(--muted)", fontSize: 13, margin: "2px 0 0 0" }}>
+                Each month has a different GST payable based on that month's net sales minus net purchases × 18%
+              </p>
+            </div>
+            <div className="chip-bar" style={{ display: "flex", gap: 4, overflowX: "auto", maxWidth: "100%" }}>
+              <button
+                className={`btn btn-xs ${selectedGstMonth === "all" ? "btn-primary" : "btn-outline"}`}
+                onClick={() => setSelectedGstMonth("all")}
+              >
+                All Months ({monthlyGstList.length})
+              </button>
+              {monthlyGstList.map((m: any) => (
+                <button
+                  key={m.month}
+                  className={`btn btn-xs ${selectedGstMonth === m.month ? "btn-primary" : "btn-outline"}`}
+                  onClick={() => setSelectedGstMonth(m.month)}
+                >
+                  {m.month}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="table-wrap">
+            <table className="table" style={{ width: "100%", textAlign: "left", fontSize: 13 }}>
+              <thead>
+                <tr style={{ background: "var(--surface-2)", borderBottom: "1px solid var(--border)" }}>
+                  <th style={{ padding: "var(--s3) var(--s4)" }}>Month</th>
+                  <th style={{ padding: "var(--s3) var(--s4)", textAlign: "right" }}>Net Sales</th>
+                  <th style={{ padding: "var(--s3) var(--s4)", textAlign: "right" }}>Net Purchases</th>
+                  <th style={{ padding: "var(--s3) var(--s4)", textAlign: "right" }}>Taxable Base (Sales - Purchase)</th>
+                  <th style={{ padding: "var(--s3) var(--s4)", textAlign: "right" }}>GST Payable (18%)</th>
+                  <th style={{ padding: "var(--s3) var(--s4)", textAlign: "right" }}>Net Profit (Pre-GST)</th>
+                  <th style={{ padding: "var(--s3) var(--s4)", textAlign: "right" }}>Net Profit (After GST)</th>
+                  <th style={{ padding: "var(--s3) var(--s4)", textAlign: "center" }}>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {monthlyGstList.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} style={{ padding: "var(--s5)", textAlign: "center", color: "var(--muted)" }}>
+                      No monthly order data recorded yet.
+                    </td>
+                  </tr>
+                ) : (
+                  (selectedGstMonth === "all" ? monthlyGstList : monthlyGstList.filter((m: any) => m.month === selectedGstMonth)).map((m: any) => {
+                    const diff = m.net_diff !== undefined ? m.net_diff : (m.sales - m.purchases);
+                    const gst = m.gst_payable !== undefined ? m.gst_payable : Math.max(0, Math.round(diff * 0.18 * 100) / 100);
+                    const netPre = m.net_profit_before_gst !== undefined ? m.net_profit_before_gst : m.net_profit || 0;
+                    const netPost = m.net_profit_after_gst !== undefined ? m.net_profit_after_gst : (netPre - gst);
+
+                    return (
+                      <tr key={m.month} style={{ borderBottom: "1px solid var(--divider)" }}>
+                        <td style={{ padding: "var(--s3) var(--s4)", fontWeight: 800 }}>
+                          {m.month}
+                        </td>
+                        <td style={{ padding: "var(--s3) var(--s4)", textAlign: "right", fontWeight: 700, color: "var(--brand)" }}>
+                          {formatINR(m.sales || 0)}
+                        </td>
+                        <td style={{ padding: "var(--s3) var(--s4)", textAlign: "right", color: "var(--warning)", fontWeight: 600 }}>
+                          {formatINR(m.purchases || 0)}
+                        </td>
+                        <td style={{ padding: "var(--s3) var(--s4)", textAlign: "right", fontWeight: 600, color: diff >= 0 ? "var(--on-surface)" : "var(--muted)" }}>
+                          {formatINR(diff)}
+                        </td>
+                        <td style={{ padding: "var(--s3) var(--s4)", textAlign: "right", fontWeight: 800, color: gst > 0 ? "#d97706" : "var(--muted)" }}>
+                          {formatINR(gst)}
+                        </td>
+                        <td style={{ padding: "var(--s3) var(--s4)", textAlign: "right", fontWeight: 600 }}>
+                          {formatINR(netPre)}
+                        </td>
+                        <td style={{ padding: "var(--s3) var(--s4)", textAlign: "right", fontWeight: 800, color: netPost >= 0 ? "var(--success)" : "var(--error)" }}>
+                          {formatINR(netPost)}
+                        </td>
+                        <td style={{ padding: "var(--s3) var(--s4)", textAlign: "center" }}>
+                          {gst > 0 ? (
+                            <span className="badge" style={{ background: "rgba(245, 158, 11, 0.15)", color: "#b45309", fontWeight: 700 }}>
+                              🏛️ Tax Payable
+                            </span>
+                          ) : (
+                            <span className="badge badge-success" style={{ fontWeight: 600 }}>
+                              ✓ ITC Surplus
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
 
         {/* Quick Actions */}
@@ -331,7 +510,31 @@ export default function Dashboard() {
                     style={{ display: "flex", alignItems: "center", padding: "var(--s3) var(--s4)", borderBottom: i < data.recent_sales.length - 1 ? "1px solid var(--divider)" : "none", gap: "var(--s3)", cursor: "pointer" }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 700, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{o.party_name}</div>
-                      <div style={{ fontSize: 12, color: "var(--muted)" }}>{o.ref_no || "No ref"} · {shortDate(o.date)}</div>
+                      <div style={{ fontSize: 12, color: "var(--muted)", display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginTop: 2 }}>
+                        <span>{o.ref_no || "No ref"} · {shortDate(o.date)}</span>
+                        <span>· {o.credit_days ?? 15}d credit</span>
+                      </div>
+                      {o.balance > 0.5 ? (
+                        <div style={{ marginTop: 4 }}>
+                          {o.is_due_passed ? (
+                            <span className="badge" style={{ background: "#fee2e2", color: "#dc2626", border: "1px solid #f87171", fontWeight: 800, fontSize: 10 }}>
+                              🔴 Due date passed ({Math.abs(o.days_left)}d overdue)
+                            </span>
+                          ) : o.days_left === 0 ? (
+                            <span className="badge" style={{ background: "#fef3c7", color: "#b45309", fontWeight: 700, fontSize: 10 }}>
+                              ⚠️ Due today
+                            </span>
+                          ) : (
+                            <span className="badge" style={{ background: "#eff6ff", color: "#1d4ed8", fontWeight: 700, fontSize: 10 }}>
+                              ⏳ {o.days_left}d left · Due {shortDate(o.due_date)}
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <div style={{ marginTop: 3 }}>
+                          <span className="badge badge-success" style={{ fontSize: 10 }}>✓ Cleared</span>
+                        </div>
+                      )}
                     </div>
                     <div style={{ textAlign: "right", display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end" }}>
                       <span style={{ fontWeight: 800, fontSize: 14, fontVariantNumeric: "tabular-nums" }}>{formatINR(o.total)}</span>

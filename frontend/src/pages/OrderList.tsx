@@ -28,6 +28,10 @@ export default function OrderList({ kind, title }: OrderListProps) {
   const [statusPaidAmount, setStatusPaidAmount] = useState("");
   const [statusPayMethod, setStatusPayMethod] = useState("RTGS");
 
+  // Quick credit days change state
+  const [creditOrder, setCreditOrder] = useState<any | null>(null);
+  const [creditDaysInput, setCreditDaysInput] = useState<number>(15);
+
   function handleWhatsApp(o: any) {
     const phoneMatch = o.notes?.match(/\[Phone:\s*([+0-9\s-]+)\]/i);
     const bill: BillData = {
@@ -120,11 +124,33 @@ export default function OrderList({ kind, title }: OrderListProps) {
     onError: (e: any) => show(e?.message || "Status update failed", "error"),
   });
 
+  const creditMutation = useMutation({
+    mutationFn: () => {
+      if (!creditOrder) return Promise.reject(new Error("No order selected"));
+      return apiPatch(`/orders/${creditOrder.id}/credit-days`, {
+        credit_days: Math.max(0, creditDaysInput || 0),
+      });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: [kind === "sale" ? "sales" : "purchases"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
+      qc.invalidateQueries({ queryKey: ["reports"] });
+      setCreditOrder(null);
+      show("Credit terms updated", "success");
+    },
+    onError: (e: any) => show(e?.message || "Failed to update credit terms", "error"),
+  });
+
   function openQuickStatus(o: any) {
     setStatusOrder(o);
     const cur = o.pay_status || "unpaid";
     setTargetStatus(cur === "cleared" ? "cleared" : cur === "partial" ? "partial" : "unpaid");
     setStatusPaidAmount(String(o.amount_paid || ""));
+  }
+
+  function openQuickCredit(o: any) {
+    setCreditOrder(o);
+    setCreditDaysInput(typeof o.credit_days === "number" ? o.credit_days : 15);
   }
 
   const filtered = useMemo(() => {
@@ -180,6 +206,7 @@ export default function OrderList({ kind, title }: OrderListProps) {
                   <th>{partyLabel}</th>
                   <th className="hide-mobile">Ref No.</th>
                   <th className="hide-mobile">Date</th>
+                  {kind === "sale" && <th>Credit / Due Terms</th>}
                   <th style={{ textAlign: "right" }}>Total</th>
                   <th className="hide-mobile" style={{ textAlign: "right" }}>Paid</th>
                   <th className="hide-mobile" style={{ textAlign: "right" }}>Balance</th>
@@ -197,9 +224,60 @@ export default function OrderList({ kind, title }: OrderListProps) {
                         {o.ref_no ? `${o.ref_no} · ` : ""}{shortDate(o.date)}
                         {o.balance > 0 && <span style={{ color: "var(--error)", marginLeft: 6, fontWeight: 600 }}>Bal: {formatINR(o.balance)}</span>}
                       </div>
+                      {kind === "sale" && (
+                        <div className="show-mobile" style={{ marginTop: 4 }}>
+                          {o.is_due_passed ? (
+                            <span className="badge" style={{ background: "#fee2e2", color: "#dc2626", border: "1px solid #f87171", fontWeight: 800, fontSize: 11 }}>
+                              🔴 Due date passed ({Math.abs(o.days_left)}d overdue)
+                            </span>
+                          ) : o.balance <= 0.5 ? (
+                            <span className="badge badge-success" style={{ fontSize: 10 }}>✓ Paid</span>
+                          ) : (
+                            <span style={{ fontSize: 11, color: o.days_left <= 3 ? "var(--warning)" : "var(--muted)", fontWeight: 600 }}>
+                              ⏳ {o.days_left}d left · Due {shortDate(o.due_date)}
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </td>
                     <td className="hide-mobile" style={{ color: "var(--muted)", fontSize: 13 }}>{o.ref_no || "—"}</td>
                     <td className="hide-mobile" style={{ color: "var(--muted)", fontSize: 13 }}>{shortDate(o.date)}</td>
+                    {kind === "sale" && (
+                      <td onClick={e => { e.stopPropagation(); openQuickCredit(o); }} style={{ cursor: "pointer" }} title="Click to edit credit terms">
+                        <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                            <span style={{ fontWeight: 700, fontSize: 12 }}>{o.credit_days ?? 15} Days</span>
+                            <span style={{ fontSize: 11, color: "var(--brand)" }}>✏️</span>
+                          </div>
+                          {o.balance <= 0.5 ? (
+                            <span className="badge badge-success" style={{ fontSize: 11, padding: "2px 6px" }}>✓ Paid</span>
+                          ) : o.is_due_passed ? (
+                            <span
+                              className="badge"
+                              style={{
+                                background: "#fee2e2",
+                                color: "#b91c1c",
+                                border: "1px solid #f87171",
+                                fontWeight: 800,
+                                fontSize: 11,
+                                padding: "2px 6px",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              🔴 Due date passed ({Math.abs(o.days_left)}d overdue)
+                            </span>
+                          ) : o.days_left === 0 ? (
+                            <span className="badge" style={{ background: "#fef3c7", color: "#b45309", fontWeight: 700, fontSize: 11, padding: "2px 6px" }}>
+                              ⚠️ Due today
+                            </span>
+                          ) : (
+                            <span className="badge" style={{ background: "#eff6ff", color: "#1d4ed8", fontWeight: 700, fontSize: 11, padding: "2px 6px" }}>
+                              ⏳ {o.days_left}d left ({shortDate(o.due_date)})
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                    )}
                     <td style={{ textAlign: "right", fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{formatINR(o.total)}</td>
                     <td className="hide-mobile" style={{ textAlign: "right", color: "var(--success)", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{formatINR(o.amount_paid)}</td>
                     <td className="hide-mobile" style={{ textAlign: "right", color: o.balance > 0 ? "var(--error)" : "var(--muted)", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{formatINR(o.balance)}</td>
@@ -322,6 +400,93 @@ export default function OrderList({ kind, title }: OrderListProps) {
               <button className="btn btn-outline" onClick={() => setStatusOrder(null)}>Cancel</button>
               <button className="btn btn-primary" onClick={() => statusMutation.mutate()} disabled={statusMutation.isPending}>
                 {statusMutation.isPending ? "Updating…" : "Update Status"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Quick Credit Days Modal */}
+      {creditOrder && (
+        <div className="modal-overlay" onClick={() => setCreditOrder(null)}>
+          <div className="modal" style={{ maxWidth: 440, width: "100%" }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Edit Credit Terms</h3>
+              <button className="modal-close" onClick={() => setCreditOrder(null)}>✕</button>
+            </div>
+            <div className="modal-body" style={{ display: "flex", flexDirection: "column", gap: "var(--s4)" }}>
+              <p style={{ color: "var(--muted)", fontSize: 13, margin: 0 }}>
+                Invoice: <strong>{creditOrder.ref_no || creditOrder.id}</strong> · {creditOrder.party_name}
+              </p>
+
+              <div className="field">
+                <label>Credit Period Presets</label>
+                <div style={{ display: "flex", gap: "var(--s2)", flexWrap: "wrap", marginTop: 4 }}>
+                  {[0, 7, 15, 30, 45, 60].map(days => (
+                    <button
+                      key={days}
+                      type="button"
+                      className={`btn btn-sm ${creditDaysInput === days ? "btn-primary" : "btn-outline"}`}
+                      onClick={() => setCreditDaysInput(days)}
+                    >
+                      {days === 0 ? "Immediate (0d)" : `${days} Days`}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="field">
+                <label>Custom Number of Credit Days</label>
+                <input
+                  className="input"
+                  type="number"
+                  min={0}
+                  max={365}
+                  value={creditDaysInput}
+                  onChange={e => setCreditDaysInput(Math.max(0, parseInt(e.target.value) || 0))}
+                  placeholder="e.g. 15"
+                />
+              </div>
+
+              {/* Calculated preview */}
+              {(() => {
+                const baseDt = new Date(creditOrder.date || Date.now());
+                const previewDue = new Date(baseDt.getTime() + creditDaysInput * 86400000);
+                const now = new Date();
+                const dueMidnight = new Date(previewDue.getFullYear(), previewDue.getMonth(), previewDue.getDate()).getTime();
+                const nowMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+                const previewDaysLeft = Math.round((dueMidnight - nowMidnight) / 86400000);
+                const isOverdue = creditOrder.balance > 0.5 && previewDaysLeft < 0;
+
+                return (
+                  <div style={{ background: "var(--surface-2)", padding: "var(--s3) var(--s4)", borderRadius: "var(--r-sm)", fontSize: 13 }}>
+                    <div><strong>Calculated Due Date:</strong> {previewDue.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</div>
+                    <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6 }}>
+                      <span><strong>Status:</strong></span>
+                      {creditOrder.balance <= 0.5 ? (
+                        <span className="badge badge-success">✓ Already Paid (₹0 Balance)</span>
+                      ) : isOverdue ? (
+                        <span className="badge" style={{ background: "#fee2e2", color: "#dc2626", border: "1px solid #f87171", fontWeight: 800 }}>
+                          🔴 Due date passed ({Math.abs(previewDaysLeft)} days overdue)
+                        </span>
+                      ) : previewDaysLeft === 0 ? (
+                        <span className="badge" style={{ background: "#fef3c7", color: "#b45309", fontWeight: 700 }}>
+                          ⚠️ Due today
+                        </span>
+                      ) : (
+                        <span className="badge" style={{ background: "#eff6ff", color: "#1d4ed8", fontWeight: 700 }}>
+                          ⏳ {previewDaysLeft} days left
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-outline" onClick={() => setCreditOrder(null)}>Cancel</button>
+              <button className="btn btn-primary" onClick={() => creditMutation.mutate()} disabled={creditMutation.isPending}>
+                {creditMutation.isPending ? "Saving…" : "Save Credit Terms"}
               </button>
             </div>
           </div>

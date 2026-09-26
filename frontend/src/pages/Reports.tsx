@@ -101,8 +101,12 @@ export default function Reports() {
   const grossProfit = summary.gross_profit || (totalSales - cogs);
   const totalExpenses = summary.total_expenses || 0;
   const netProfit = summary.net_profit || (grossProfit - totalExpenses);
+  const totalPurchases = summary.total_purchases || 0;
+  const totalGstPayable = summary.gst_payable !== undefined ? summary.gst_payable : Math.max(0, Math.round((totalSales - totalPurchases) * 0.18 * 100) / 100);
+  const netProfitAfterGst = summary.net_profit_after_gst !== undefined ? summary.net_profit_after_gst : (netProfit - totalGstPayable);
   const grossMargin = totalSales > 0 ? ((grossProfit / totalSales) * 100).toFixed(1) : "0.0";
   const netMargin = totalSales > 0 ? ((netProfit / totalSales) * 100).toFixed(1) : "0.0";
+  const netMarginAfterGst = totalSales > 0 ? ((netProfitAfterGst / totalSales) * 100).toFixed(1) : "0.0";
 
   const totalExpCalc = Object.values(expenseByCategory).reduce(
     (a: number, b: any) => a + Number(b),
@@ -175,17 +179,37 @@ export default function Reports() {
   }
 
   function exportMonthlyLedgerCSV() {
-    const headers = ["Month", "Sales Revenue (INR)", "Units Sold", "Purchases PO (INR)", "COGS (INR)", "Gross Profit (INR)", "Margin Pct", "Top Selling Model"];
-    const rows = filteredMonthlyBreakdown.map((mb: any) => [
-      mb.month,
-      mb.sales,
-      mb.units,
-      mb.purchases,
-      mb.cogs,
-      mb.gross_profit,
-      mb.sales > 0 ? ((mb.gross_profit / mb.sales) * 100).toFixed(1) + "%" : "0.0%",
-      `"${(mb.top_model || '').replace(/"/g, '""')}"`
-    ]);
+    const headers = [
+      "Month",
+      "Sales Revenue (INR)",
+      "Units Sold",
+      "Purchases PO (INR)",
+      "COGS (INR)",
+      "Gross Profit (INR)",
+      "Margin Pct",
+      "GST Payable 18% (INR)",
+      "Net Profit After GST (INR)",
+      "Top Selling Model"
+    ];
+    const rows = filteredMonthlyBreakdown.map((mb: any) => {
+      const diff = mb.net_diff !== undefined ? mb.net_diff : (mb.sales - mb.purchases);
+      const gst = mb.gst_payable !== undefined ? mb.gst_payable : Math.max(0, Math.round(diff * 0.18 * 100) / 100);
+      const netPre = mb.net_profit_before_gst !== undefined ? mb.net_profit_before_gst : mb.net_profit || 0;
+      const netPost = mb.net_profit_after_gst !== undefined ? mb.net_profit_after_gst : (netPre - gst);
+
+      return [
+        mb.month,
+        mb.sales,
+        mb.units,
+        mb.purchases,
+        mb.cogs,
+        mb.gross_profit,
+        mb.sales > 0 ? ((mb.gross_profit / mb.sales) * 100).toFixed(1) + "%" : "0.0%",
+        gst,
+        netPost,
+        `"${(mb.top_model || '').replace(/"/g, '""')}"`
+      ];
+    });
     downloadCSV("Soneja_Monthly_Ledger.csv", [headers, ...rows]);
   }
 
@@ -655,20 +679,27 @@ export default function Reports() {
                   <th style={{ textAlign: "right" }}>Purchases (PO)</th>
                   <th style={{ textAlign: "right" }}>COGS</th>
                   <th style={{ textAlign: "right" }}>Gross Profit</th>
+                  <th style={{ textAlign: "right" }}>GST Payable (18%)</th>
+                  <th style={{ textAlign: "right" }}>Net After GST</th>
                   <th style={{ textAlign: "right" }}>Margin</th>
-                  <th>Top Selling Model</th>
+                  <th>Top Model</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredMonthlyBreakdown.length === 0 ? (
                   <tr>
-                    <td colSpan={8} style={{ textAlign: "center", color: "var(--muted)", padding: "var(--s5)" }}>
+                    <td colSpan={10} style={{ textAlign: "center", color: "var(--muted)", padding: "var(--s5)" }}>
                       No monthly transactions found for selected period.
                     </td>
                   </tr>
                 ) : (
                   filteredMonthlyBreakdown.map((mb: any) => {
                     const marginPct = mb.sales > 0 ? ((mb.gross_profit / mb.sales) * 100).toFixed(1) : "0.0";
+                    const diff = mb.net_diff !== undefined ? mb.net_diff : (mb.sales - mb.purchases);
+                    const gst = mb.gst_payable !== undefined ? mb.gst_payable : Math.max(0, Math.round(diff * 0.18 * 100) / 100);
+                    const netPre = mb.net_profit_before_gst !== undefined ? mb.net_profit_before_gst : mb.net_profit || 0;
+                    const netPost = mb.net_profit_after_gst !== undefined ? mb.net_profit_after_gst : (netPre - gst);
+
                     return (
                       <tr key={mb.month}>
                         <td style={{ fontWeight: 700 }}>{mb.month}</td>
@@ -680,6 +711,12 @@ export default function Reports() {
                         <td style={{ textAlign: "right", color: "var(--muted)" }}>{formatINR(mb.cogs)}</td>
                         <td style={{ textAlign: "right", fontWeight: 700, color: mb.gross_profit >= 0 ? "var(--success)" : "var(--error)" }}>
                           {formatINR(mb.gross_profit)}
+                        </td>
+                        <td style={{ textAlign: "right", fontWeight: 700, color: gst > 0 ? "#d97706" : "var(--muted)" }}>
+                          {formatINR(gst)}
+                        </td>
+                        <td style={{ textAlign: "right", fontWeight: 800, color: netPost >= 0 ? "var(--success)" : "var(--error)" }}>
+                          {formatINR(netPost)}
                         </td>
                         <td style={{ textAlign: "right", color: "var(--success)", fontWeight: 600 }}>{marginPct}%</td>
                         <td>
@@ -903,47 +940,66 @@ export default function Reports() {
           <div className="card-header" style={{ borderBottom: "1px solid var(--border)" }}>
             <div>
               <h2 style={{ fontSize: 16, fontWeight: 700 }}>Profit & Loss Overview (YTD)</h2>
-              <p style={{ color: "var(--muted)", fontSize: 13 }}>Standard distribution accounting statement</p>
+              <p style={{ color: "var(--muted)", fontSize: 13 }}>Standard distribution accounting statement with GST deduction</p>
             </div>
-            <div style={{ display: "flex", gap: "var(--s3)" }}>
+            <div style={{ display: "flex", gap: "var(--s3)", flexWrap: "wrap" }}>
               <div className="badge badge-brand">Gross Margin: {grossMargin}%</div>
               <div className={`badge ${netProfit >= 0 ? "badge-success" : "badge-error"}`}>
-                Net Margin: {netMargin}%
+                Pre-GST Margin: {netMargin}%
+              </div>
+              <div className={`badge ${netProfitAfterGst >= 0 ? "badge-success" : "badge-error"}`} style={{ fontWeight: 700 }}>
+                Net Margin (After GST): {netMarginAfterGst}%
               </div>
             </div>
           </div>
           <div style={{ padding: "var(--s4)" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "var(--s4)" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "var(--s4)" }}>
               <div style={{ padding: "var(--s4)", borderRadius: "var(--r-md)", background: "var(--surface-2)" }}>
                 <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, textTransform: "uppercase" }}>Total Revenue (Sales)</div>
-                <div style={{ fontSize: 24, fontWeight: 800, color: "var(--brand)", marginTop: 4 }}>{formatINR(totalSales)}</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: "var(--brand)", marginTop: 4 }}>{formatINR(totalSales)}</div>
                 <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>{summary.sales_count || 0} invoices recorded</div>
               </div>
 
               <div style={{ padding: "var(--s4)", borderRadius: "var(--r-md)", background: "var(--surface-2)" }}>
                 <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, textTransform: "uppercase" }}>Cost of Goods (COGS)</div>
-                <div style={{ fontSize: 24, fontWeight: 800, color: "var(--on-surface)", marginTop: 4 }}>{formatINR(cogs)}</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: "var(--on-surface)", marginTop: 4 }}>{formatINR(cogs)}</div>
                 <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>Direct unit acquisition cost</div>
               </div>
 
               <div style={{ padding: "var(--s4)", borderRadius: "var(--r-md)", background: "var(--surface-2)" }}>
                 <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, textTransform: "uppercase" }}>Gross Profit</div>
-                <div style={{ fontSize: 24, fontWeight: 800, color: "var(--success)", marginTop: 4 }}>{formatINR(grossProfit)}</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: "var(--success)", marginTop: 4 }}>{formatINR(grossProfit)}</div>
                 <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>Revenue minus unit cost</div>
               </div>
 
               <div style={{ padding: "var(--s4)", borderRadius: "var(--r-md)", background: "var(--surface-2)" }}>
                 <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, textTransform: "uppercase" }}>Operating Expenses</div>
-                <div style={{ fontSize: 24, fontWeight: 800, color: "var(--warning)", marginTop: 4 }}>{formatINR(totalExpenses)}</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: "var(--warning)", marginTop: 4 }}>{formatINR(totalExpenses)}</div>
                 <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>Transport, rent, salaries, utilities</div>
               </div>
 
-              <div style={{ padding: "var(--s4)", borderRadius: "var(--r-md)", background: netProfit >= 0 ? "var(--success-bg)" : "var(--error-bg)" }}>
-                <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, textTransform: "uppercase" }}>Net Profit</div>
-                <div style={{ fontSize: 24, fontWeight: 800, color: netProfit >= 0 ? "var(--success)" : "var(--error)", marginTop: 4 }}>
+              <div style={{ padding: "var(--s4)", borderRadius: "var(--r-md)", background: "var(--surface-2)" }}>
+                <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, textTransform: "uppercase" }}>Net Profit (Pre-GST)</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: netProfit >= 0 ? "var(--success)" : "var(--error)", marginTop: 4 }}>
                   {formatINR(netProfit)}
                 </div>
-                <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>Bottom line distribution earnings</div>
+                <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>Gross profit minus expenses</div>
+              </div>
+
+              <div style={{ padding: "var(--s4)", borderRadius: "var(--r-md)", background: "var(--surface-2)", border: "1px solid rgba(220, 38, 38, 0.25)" }}>
+                <div style={{ fontSize: 12, color: "var(--error)", fontWeight: 700, textTransform: "uppercase" }}>GST Payable (18%)</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: "var(--error)", marginTop: 4 }}>
+                  - {formatINR(totalGstPayable)}
+                </div>
+                <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>(Net Sales - Purchases) × 18%</div>
+              </div>
+
+              <div style={{ padding: "var(--s4)", borderRadius: "var(--r-md)", background: netProfitAfterGst >= 0 ? "var(--success-bg)" : "var(--error-bg)", border: `1px solid ${netProfitAfterGst >= 0 ? "var(--success)" : "var(--error)"}` }}>
+                <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 700, textTransform: "uppercase" }}>Net Profit (After GST)</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: netProfitAfterGst >= 0 ? "var(--success)" : "var(--error)", marginTop: 4 }}>
+                  {formatINR(netProfitAfterGst)}
+                </div>
+                <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>Final earnings after GST deduction</div>
               </div>
             </div>
           </div>
@@ -1010,6 +1066,7 @@ export default function Reports() {
                   <tr>
                     <th>Dealer</th>
                     <th>Invoice</th>
+                    <th>Credit / Due Terms</th>
                     <th>Aging</th>
                     <th className="num">Balance Due</th>
                   </tr>
@@ -1017,7 +1074,7 @@ export default function Reports() {
                 <tbody>
                   {overdueReceivables.length === 0 ? (
                     <tr>
-                      <td colSpan={4} style={{ textAlign: "center", color: "var(--muted)", padding: "var(--s6)" }}>
+                      <td colSpan={5} style={{ textAlign: "center", color: "var(--muted)", padding: "var(--s6)" }}>
                         🎉 No overdue receivables! All dealers are fully cleared.
                       </td>
                     </tr>
@@ -1026,6 +1083,60 @@ export default function Reports() {
                       <tr key={r.id} style={{ cursor: "pointer" }} onClick={() => navigate(`/sales/${r.id}`)}>
                         <td style={{ fontWeight: 600 }}>{r.party_name || "Unknown"}</td>
                         <td><span className="mono" style={{ fontSize: 12 }}>{r.ref_no || "—"}</span></td>
+                        <td>
+                          {r.is_due_passed ? (
+                            <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                              <span style={{
+                                fontSize: 11,
+                                fontWeight: 700,
+                                color: "#dc2626",
+                                background: "#fee2e2",
+                                border: "1px solid #fca5a5",
+                                padding: "2px 6px",
+                                borderRadius: 4,
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: 4,
+                                width: "fit-content"
+                              }}>
+                                🔴 Due date passed ({Math.abs(r.days_left || 0)}d overdue)
+                              </span>
+                              <span style={{ fontSize: 11, color: "var(--muted)" }}>
+                                Due: {r.due_date ? r.due_date.slice(0, 10) : "—"} ({r.credit_days || 15}d)
+                              </span>
+                            </div>
+                          ) : r.days_left === 0 ? (
+                            <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                              <span style={{
+                                fontSize: 11,
+                                fontWeight: 700,
+                                color: "#d97706",
+                                background: "#fef3c7",
+                                border: "1px solid #fcd34d",
+                                padding: "2px 6px",
+                                borderRadius: 4,
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: 4,
+                                width: "fit-content"
+                              }}>
+                                ⚠️ Due today
+                              </span>
+                              <span style={{ fontSize: 11, color: "var(--muted)" }}>
+                                Due: {r.due_date ? r.due_date.slice(0, 10) : "—"}
+                              </span>
+                            </div>
+                          ) : (
+                            <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                              <span style={{ fontSize: 12, fontWeight: 700, color: "var(--brand)" }}>
+                                ⏳ {r.days_left}d left
+                              </span>
+                              <span style={{ fontSize: 11, color: "var(--muted)" }}>
+                                Due: {r.due_date ? r.due_date.slice(0, 10) : "—"} ({r.credit_days || 15}d)
+                              </span>
+                            </div>
+                          )}
+                        </td>
                         <td>
                           <span className={`badge ${r.age_days > 30 ? "badge-error" : r.age_days > 15 ? "badge-warning" : "badge-info"}`}>
                             {r.age_days} days

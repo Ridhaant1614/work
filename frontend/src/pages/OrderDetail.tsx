@@ -26,6 +26,10 @@ export default function OrderDetail({ kind }: { kind: Kind }) {
   const [showWhatsAppModal, setShowWhatsAppModal] = useState(false);
   const [whatsAppBill, setWhatsAppBill] = useState<BillData | null>(null);
 
+  // Credit Terms Modal State
+  const [showCreditModal, setShowCreditModal] = useState(false);
+  const [creditDaysVal, setCreditDaysVal] = useState<number>(15);
+
   // Status Change Modal State
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState<"cleared" | "unpaid" | "partial">("cleared");
@@ -42,6 +46,17 @@ export default function OrderDetail({ kind }: { kind: Kind }) {
   const { data: o, isLoading, isError, refetch } = useQuery({
     queryKey: [listKey, id],
     queryFn: () => apiGet(`${isSale ? "/sales" : "/purchases"}/${id}`),
+  });
+
+  const creditMutation = useMutation({
+    mutationFn: (days: number) => apiPatch(`/orders/${id}/credit-days`, { credit_days: days }),
+    onSuccess: () => {
+      invalidateAll();
+      refetch();
+      setShowCreditModal(false);
+      show("Credit terms updated", "success");
+    },
+    onError: (e: any) => show(e?.message || "Failed to update credit terms", "error"),
   });
 
   const { data: dealers = [] } = useQuery({
@@ -184,6 +199,10 @@ export default function OrderDetail({ kind }: { kind: Kind }) {
       total: Number(o.total) || 0,
       paid: Number(o.amount_paid ?? o.paid ?? 0),
       balance: Number(o.balance ?? 0),
+      creditDays: o.credit_days,
+      dueDate: o.due_date,
+      daysLeft: o.days_left,
+      isDuePassed: o.is_due_passed,
       payMethod: o.payments?.[0]?.method || (o.payments?.[0]?.note?.match(/\[(.*?)\]/)?.[1]) || o.payments?.[0]?.note || (o.notes?.match(/\[Payment:\s*(.*?)\]/)?.[1]) || (o.pay_status === "cleared" ? "RTGS" : "RTGS / Bank Transfer"),
       notes: o.notes,
     };
@@ -227,6 +246,18 @@ export default function OrderDetail({ kind }: { kind: Kind }) {
           </div>
         </div>
         <div className="page-header-actions">
+          {/* Credit Terms Action */}
+          {isSale && (
+            <button
+              className="btn btn-outline btn-sm"
+              onClick={() => {
+                setCreditDaysVal(typeof o.credit_days === "number" ? o.credit_days : 15);
+                setShowCreditModal(true);
+              }}
+            >
+              📅 Credit Terms ({o.credit_days ?? 15}d)
+            </button>
+          )}
           {/* Change Status Action */}
           <button className="btn btn-outline btn-sm" onClick={openStatusModal}>
             ✏️ Change Status
@@ -284,6 +315,50 @@ export default function OrderDetail({ kind }: { kind: Kind }) {
             {o.notes && (
               <div style={{ fontSize: 13, background: "var(--surface-2)", padding: "var(--s2) var(--s3)", borderRadius: "var(--r-sm)" }}>
                 <strong>Notes:</strong> {o.notes}
+              </div>
+            )}
+
+            {isSale && (
+              <div style={{ marginTop: "var(--s2)", padding: "var(--s3)", background: "var(--surface-2)", borderRadius: "var(--r-sm)", display: "flex", flexDirection: "column", gap: 6 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontWeight: 700, fontSize: 13 }}>Credit Terms &amp; Due Date</span>
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-xs"
+                    onClick={() => {
+                      setCreditDaysVal(typeof o.credit_days === "number" ? o.credit_days : 15);
+                      setShowCreditModal(true);
+                    }}
+                  >
+                    ✏️ Edit Credit Days
+                  </button>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                  <span style={{ color: "var(--muted)" }}>Credit Period:</span>
+                  <span style={{ fontWeight: 700 }}>{o.credit_days ?? 15} Days</span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                  <span style={{ color: "var(--muted)" }}>Due Date:</span>
+                  <span style={{ fontWeight: 700 }}>{formatDate(o.due_date)}</span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13, borderTop: "1px dashed var(--border)", paddingTop: 4 }}>
+                  <span style={{ color: "var(--muted)" }}>Due Status:</span>
+                  {o.balance <= 0.5 ? (
+                    <span className="badge badge-success">✓ Fully Cleared</span>
+                  ) : o.is_due_passed ? (
+                    <span className="badge" style={{ background: "#fee2e2", color: "#b91c1c", border: "1px solid #f87171", fontWeight: 800 }}>
+                      🔴 Due date passed ({Math.abs(o.days_left)} days overdue)
+                    </span>
+                  ) : o.days_left === 0 ? (
+                    <span className="badge" style={{ background: "#fef3c7", color: "#b45309", fontWeight: 700 }}>
+                      ⚠️ Due today
+                    </span>
+                  ) : (
+                    <span className="badge" style={{ background: "#eff6ff", color: "#1d4ed8", fontWeight: 700 }}>
+                      ⏳ {o.days_left} days left
+                    </span>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -349,6 +424,19 @@ export default function OrderDetail({ kind }: { kind: Kind }) {
                 {formatINR(o.balance)}
               </span>
             </div>
+            {isSale && o.balance > 0.5 && (
+              <div style={{ marginTop: 2, display: "flex", justifyContent: "flex-end" }}>
+                {o.is_due_passed ? (
+                  <span className="badge" style={{ background: "#fee2e2", color: "#b91c1c", border: "1px solid #f87171", fontWeight: 800, padding: "4px 8px" }}>
+                    🔴 Due date passed ({Math.abs(o.days_left)} days overdue)
+                  </span>
+                ) : (
+                  <span className="badge" style={{ background: "#eff6ff", color: "#1d4ed8", fontWeight: 700, padding: "4px 8px" }}>
+                    ⏳ {o.days_left} days left (Due {formatDate(o.due_date)})
+                  </span>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Payment History Card with Edit and Delete options */}
@@ -582,6 +670,97 @@ export default function OrderDetail({ kind }: { kind: Kind }) {
               </button>
               <button className="btn btn-primary" onClick={() => statusMutation.mutate()} disabled={statusMutation.isPending}>
                 {statusMutation.isPending ? "Updating…" : "Apply Status Change"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Credit Terms Modal */}
+      {showCreditModal && (
+        <div className="modal-overlay" onClick={() => setShowCreditModal(false)}>
+          <div className="modal" style={{ maxWidth: 440, width: "100%" }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Change Credit Days &amp; Due Date</h3>
+              <button className="modal-close" onClick={() => setShowCreditModal(false)}>✕</button>
+            </div>
+            <div className="modal-body" style={{ display: "flex", flexDirection: "column", gap: "var(--s4)" }}>
+              <p style={{ color: "var(--muted)", fontSize: 13, margin: 0 }}>
+                Invoice: <strong>{o.ref_no || o.id}</strong> · {o.party_name}
+              </p>
+
+              <div className="field">
+                <label>Credit Period Presets</label>
+                <div style={{ display: "flex", gap: "var(--s2)", flexWrap: "wrap", marginTop: 4 }}>
+                  {[0, 7, 15, 30, 45, 60].map(days => (
+                    <button
+                      key={days}
+                      type="button"
+                      className={`btn btn-sm ${creditDaysVal === days ? "btn-primary" : "btn-outline"}`}
+                      onClick={() => setCreditDaysVal(days)}
+                    >
+                      {days === 0 ? "Immediate (0d)" : `${days} Days`}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="field">
+                <label>Custom Number of Credit Days</label>
+                <input
+                  className="input"
+                  type="number"
+                  min={0}
+                  max={365}
+                  value={creditDaysVal}
+                  onChange={e => setCreditDaysVal(Math.max(0, parseInt(e.target.value) || 0))}
+                  placeholder="e.g. 15"
+                />
+              </div>
+
+              {/* Calculated preview */}
+              {(() => {
+                const baseDt = new Date(o.date || Date.now());
+                const previewDue = new Date(baseDt.getTime() + creditDaysVal * 86400000);
+                const now = new Date();
+                const dueMidnight = new Date(previewDue.getFullYear(), previewDue.getMonth(), previewDue.getDate()).getTime();
+                const nowMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+                const previewDaysLeft = Math.round((dueMidnight - nowMidnight) / 86400000);
+                const isOverdue = o.balance > 0.5 && previewDaysLeft < 0;
+
+                return (
+                  <div style={{ background: "var(--surface-2)", padding: "var(--s3) var(--s4)", borderRadius: "var(--r-sm)", fontSize: 13 }}>
+                    <div><strong>Calculated Due Date:</strong> {previewDue.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</div>
+                    <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6 }}>
+                      <span><strong>Due Status:</strong></span>
+                      {o.balance <= 0.5 ? (
+                        <span className="badge badge-success">✓ Fully Cleared (₹0 Balance)</span>
+                      ) : isOverdue ? (
+                        <span className="badge" style={{ background: "#fee2e2", color: "#dc2626", border: "1px solid #f87171", fontWeight: 800 }}>
+                          🔴 Due date passed ({Math.abs(previewDaysLeft)} days overdue)
+                        </span>
+                      ) : previewDaysLeft === 0 ? (
+                        <span className="badge" style={{ background: "#fef3c7", color: "#b45309", fontWeight: 700 }}>
+                          ⚠️ Due today
+                        </span>
+                      ) : (
+                        <span className="badge" style={{ background: "#eff6ff", color: "#1d4ed8", fontWeight: 700 }}>
+                          ⏳ {previewDaysLeft} days left
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-outline" onClick={() => setShowCreditModal(false)}>Cancel</button>
+              <button
+                className="btn btn-primary"
+                onClick={() => creditMutation.mutate(creditDaysVal)}
+                disabled={creditMutation.isPending}
+              >
+                {creditMutation.isPending ? "Updating…" : "Update Credit Terms"}
               </button>
             </div>
           </div>

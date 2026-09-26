@@ -118,6 +118,7 @@ class OrderIn(BaseModel):
     initial_payment: Optional[float] = 0
     payment_status: Optional[str] = None  # "cleared" | "unpaid" | "partial"
     amount_paid: Optional[float] = None
+    credit_days: Optional[int] = 15
 
 
 class PaymentIn(BaseModel):
@@ -144,6 +145,11 @@ class OrderEdit(BaseModel):
     party_id: Optional[str] = None
     party_name: Optional[str] = None
     notes: Optional[str] = None
+    credit_days: Optional[int] = None
+
+
+class CreditDaysIn(BaseModel):
+    credit_days: int = Field(ge=0, le=365)
 
 class StockAdjustIn(BaseModel):
     qty_delta: Optional[float] = None
@@ -377,6 +383,32 @@ def serialize_order(o: dict) -> dict:
     o["balance"] = max(0, balance)
     o["pay_status"] = pay_status
     o["age_days"] = days_since(o.get("date", now_iso())) if balance > 0.5 else 0
+
+    is_sale = o.get("kind") == "sale" or (not o.get("kind") and bool(o.get("party_id")))
+    credit_days = int(o.get("credit_days", 15) or 15) if is_sale else 0
+    date_str = o.get("date") or now_iso()
+    due_date = o.get("due_date")
+    days_left = 0
+    try:
+        dt = datetime.fromisoformat(date_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        if not due_date:
+            due_dt = dt + timedelta(days=credit_days)
+            due_date = due_dt.isoformat()
+        else:
+            due_dt = datetime.fromisoformat(due_date)
+            if due_dt.tzinfo is None:
+                due_dt = due_dt.replace(tzinfo=timezone.utc)
+        now_dt = datetime.now(timezone.utc)
+        days_left = (due_dt.date() - now_dt.date()).days
+    except Exception:
+        pass
+
+    o["credit_days"] = credit_days
+    o["due_date"] = due_date
+    o["days_left"] = days_left
+    o["is_due_passed"] = days_left < 0 and balance > 0.5
     return o
 
 
@@ -412,9 +444,22 @@ async def _create_order(kind: str, body: OrderIn):
     elif body.initial_payment and body.initial_payment > 0:
         payments.append({"id": new_id(), "amount": round(body.initial_payment, 2),
                          "date": body.date or now_iso(), "note": "Initial payment"})
+
+    is_sale = kind == "sale"
+    credit_days = int(body.credit_days or 15) if is_sale else 0
+    date_str = body.date or now_iso()
+    try:
+        dt = datetime.fromisoformat(date_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        due_date = (dt + timedelta(days=credit_days)).isoformat()
+    except Exception:
+        due_date = None
+
     doc = {"id": new_id(), "kind": kind, "party_id": body.party_id,
            "party_name": body.party_name, "ref_no": body.ref_no,
-           "date": body.date or now_iso(), "notes": body.notes or "",
+           "date": date_str, "credit_days": credit_days, "due_date": due_date,
+           "notes": body.notes or "",
            "items": items, "total": total, "payments": payments,
            "deleted_at": None, "created_at": now_iso()}
     await db.orders.insert_one(doc)
@@ -445,6 +490,18 @@ async def _update_order(oid: str, body: OrderIn):
     changes = {"party_id": body.party_id, "party_name": body.party_name,
                "ref_no": body.ref_no, "date": body.date or existing.get("date"),
                "notes": body.notes or "", "items": items, "total": round(total, 2)}
+    if body.credit_days is not None:
+        c_days = max(0, body.credit_days)
+        changes["credit_days"] = c_days
+        effective_date = body.date or existing.get("date") or now_iso()
+        try:
+            dt = datetime.fromisoformat(effective_date)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            changes["due_date"] = (dt + timedelta(days=c_days)).isoformat()
+        except Exception:
+            pass
+
     if body.payment_status is not None or body.amount_paid is not None:
         p_status = (body.payment_status or "").lower().strip()
         if p_status == "cleared":
@@ -592,9 +649,38 @@ async def edit_order(oid: str, body: OrderEdit, user=Depends(current_user)):
     changes = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
     if not changes:
         raise HTTPException(400, "No changes")
+    if "credit_days" in changes:
+        days = max(0, int(changes["credit_days"]))
+        effective_date = changes.get("date") or o.get("date") or now_iso()
+        try:
+            dt = datetime.fromisoformat(effective_date)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            changes["due_date"] = (dt + timedelta(days=days)).isoformat()
+        except Exception:
+            pass
     await db.orders.update_one({"id": oid}, {"$set": changes})
     o = await db.orders.find_one({"id": oid})
     return serialize_order(o)
+
+
+@api_router.patch("/orders/{oid}/credit-days")
+async def update_order_credit_days(oid: str, body: CreditDaysIn, user=Depends(current_user)):
+    o = await db.orders.find_one({"id": oid, "deleted_at": None})
+    if not o:
+        raise HTTPException(404, "Order not found")
+    days = max(0, body.credit_days)
+    date_str = o.get("date") or now_iso()
+    try:
+        dt = datetime.fromisoformat(date_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        due_date = (dt + timedelta(days=days)).isoformat()
+    except Exception:
+        due_date = None
+    await db.orders.update_one({"id": oid}, {"$set": {"credit_days": days, "due_date": due_date}})
+    updated_o = await db.orders.find_one({"id": oid})
+    return serialize_order(updated_o)
 
 
 @api_router.get("/orders/{oid}")
@@ -699,6 +785,57 @@ async def _compute_summary():
     units_in_stock = int(sum(max(0.0, float(p.get("qty_on_hand", 0))) for p in products))
     net_profit = round(total_sales - cogs - total_expenses, 2)
 
+    # GST calculations: (Net Sales - Net Purchase) * 18%
+    gst_rate = 0.18
+    gst_taxable_base = round(total_sales - total_purchases, 2)
+    gst_payable = max(0.0, round(gst_taxable_base * gst_rate, 2))
+    net_profit_before_gst = net_profit
+    net_profit_after_gst = round(net_profit - gst_payable, 2)
+
+    # Monthly aggregation
+    sales_by_month = {}
+    purchases_by_month = {}
+    months_set = set()
+    for o in sales:
+        m = (o.get("date") or "")[:7]
+        if m:
+            sales_by_month[m] = round(sales_by_month.get(m, 0.0) + float(o.get("total", 0)), 2)
+            months_set.add(m)
+    for o in purchases:
+        m = (o.get("date") or "")[:7]
+        if m:
+            purchases_by_month[m] = round(purchases_by_month.get(m, 0.0) + float(o.get("total", 0)), 2)
+            months_set.add(m)
+
+    monthly_gst_breakdown = []
+    for m in sorted(list(months_set)):
+        ms = sales_by_month.get(m, 0.0)
+        mp = purchases_by_month.get(m, 0.0)
+        diff = round(ms - mp, 2)
+        mgst = max(0.0, round(diff * 0.18, 2))
+        monthly_gst_breakdown.append({
+            "month": m,
+            "sales": ms,
+            "purchases": mp,
+            "net_diff": diff,
+            "gst_rate": 0.18,
+            "gst_payable": mgst,
+            "raw_gst": round(diff * 0.18, 2),
+        })
+
+    current_month_key = datetime.now(timezone.utc).strftime("%Y-%m")
+    cur_m = next((item for item in monthly_gst_breakdown if item["month"] == current_month_key), None)
+    if not cur_m:
+        cur_m = {
+            "month": current_month_key,
+            "sales": sales_by_month.get(current_month_key, 0.0),
+            "purchases": purchases_by_month.get(current_month_key, 0.0),
+            "net_diff": round(sales_by_month.get(current_month_key, 0.0) - purchases_by_month.get(current_month_key, 0.0), 2),
+            "gst_rate": 0.18,
+            "gst_payable": max(0.0, round((sales_by_month.get(current_month_key, 0.0) - purchases_by_month.get(current_month_key, 0.0)) * 0.18, 2)),
+            "raw_gst": round((sales_by_month.get(current_month_key, 0.0) - purchases_by_month.get(current_month_key, 0.0)) * 0.18, 2),
+        }
+
     negative_stock = [clean(p) for p in products if float(p.get("qty_on_hand", 0)) < 0]
     negative_stock.sort(key=lambda p: p.get("qty_on_hand", 0))
 
@@ -712,6 +849,11 @@ async def _compute_summary():
         "cogs": cogs,
         "gross_profit": round(total_sales - cogs, 2),
         "net_profit": net_profit,
+        "net_profit_before_gst": net_profit_before_gst,
+        "gst_rate": gst_rate,
+        "gst_taxable_base": gst_taxable_base,
+        "gst_payable": gst_payable,
+        "net_profit_after_gst": net_profit_after_gst,
         "receivable": receivable,
         "payable": payable,
         "inventory_value": inventory_value,
@@ -720,6 +862,8 @@ async def _compute_summary():
         "purchases_count": len(purchases),
         "low_stock": low_stock,
         "negative_stock": negative_stock,
+        "monthly_gst_breakdown": monthly_gst_breakdown,
+        "current_month_gst": cur_m,
     }
 
 
@@ -923,11 +1067,19 @@ async def reports(user=Depends(current_user)):
     def overdue(rows):
         out = []
         for o in rows:
-            bal = o.get("total", 0.0) - sum(p.get("amount", 0.0) for p in o.get("payments", []))
-            if bal > 0.5:
-                out.append({"id": o["id"], "party_name": o.get("party_name"),
-                            "ref_no": o.get("ref_no"), "balance": round(bal, 2),
-                            "age_days": days_since(o.get("date", now_iso()))})
+            so = serialize_order(dict(o))
+            if so["balance"] > 0.5:
+                out.append({
+                    "id": so["id"],
+                    "party_name": so.get("party_name"),
+                    "ref_no": so.get("ref_no"),
+                    "balance": round(so["balance"], 2),
+                    "credit_days": so.get("credit_days", 15),
+                    "due_date": so.get("due_date"),
+                    "days_left": so.get("days_left", 0),
+                    "is_due_passed": so.get("is_due_passed", False),
+                    "age_days": so.get("age_days", 0),
+                })
         out.sort(key=lambda x: x["age_days"], reverse=True)
         return out
 

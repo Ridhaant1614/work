@@ -25,6 +25,7 @@ export default function OrderForm({ kind }: { kind: Kind }) {
   const [refNo, setRefNo] = useState("");
   const [notes, setNotes] = useState("");
   const [orderDate, setOrderDate] = useState(toInputDate(null));
+  const [creditDays, setCreditDays] = useState<number>(15);
   const [payStatus, setPayStatus] = useState<"unpaid" | "partial" | "cleared">("unpaid");
   const [amountPaid, setAmountPaid] = useState("");
   const [payMethod, setPayMethod] = useState("RTGS");
@@ -45,6 +46,9 @@ export default function OrderForm({ kind }: { kind: Kind }) {
       setRefNo(existing.ref_no ?? "");
       setNotes(existing.notes ?? "");
       setOrderDate(toInputDate(existing.date));
+      if (existing.credit_days !== undefined && existing.credit_days !== null) {
+        setCreditDays(Number(existing.credit_days) || 0);
+      }
       const curStatus = existing.pay_status === "cleared" ? "cleared" : (existing.amount_paid > 0 || existing.paid > 0) ? "partial" : "unpaid";
       setPayStatus(curStatus);
       setAmountPaid(String(existing.amount_paid ?? existing.paid ?? ""));
@@ -76,6 +80,7 @@ export default function OrderForm({ kind }: { kind: Kind }) {
         ref_no: refNo.trim() || null,
         notes: finalNotes,
         date: isoDate,
+        credit_days: isSale ? Math.max(0, parseInt(String(creditDays)) || 0) : undefined,
         items: lines.map(l => ({ product_id: l.product_id, model: l.model, qty: parseFloat(l.qty) || 0, rate: parseFloat(l.rate) || 0 })),
         payment_status: payStatus,
         amount_paid: calculatedPaid,
@@ -175,6 +180,74 @@ export default function OrderForm({ kind }: { kind: Kind }) {
               <input className="input" type="date" value={orderDate} onChange={e => setOrderDate(e.target.value)} />
             </div>
           </div>
+
+          {isSale && (
+            <div style={{ background: "var(--surface-2)", padding: "var(--s3) var(--s4)", borderRadius: "var(--r-sm)", display: "flex", flexDirection: "column", gap: "var(--s2)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <label style={{ fontWeight: 700, fontSize: 13, margin: 0 }}>Credit Terms &amp; Due Date</label>
+                <span style={{ fontSize: 12, color: "var(--muted)" }}>Credit days can be edited anytime</span>
+              </div>
+              <div style={{ display: "flex", gap: "var(--s2)", flexWrap: "wrap", marginTop: 2 }}>
+                {[0, 7, 15, 30, 45, 60].map(days => (
+                  <button
+                    key={days}
+                    type="button"
+                    className={`btn btn-xs ${creditDays === days ? "btn-primary" : "btn-outline"}`}
+                    onClick={() => setCreditDays(days)}
+                  >
+                    {days === 0 ? "Immediate (0d)" : `${days} Days`}
+                  </button>
+                ))}
+              </div>
+              <div style={{ display: "flex", gap: "var(--s3)", alignItems: "center", marginTop: 4, flexWrap: "wrap" }}>
+                <div style={{ flex: "0 0 150px" }}>
+                  <label style={{ fontSize: 11, color: "var(--muted)", marginBottom: 2 }}>Number of Days</label>
+                  <input
+                    className="input input-sm"
+                    type="number"
+                    min={0}
+                    max={365}
+                    value={creditDays}
+                    onChange={e => setCreditDays(Math.max(0, parseInt(e.target.value) || 0))}
+                    placeholder="15"
+                  />
+                </div>
+                {(() => {
+                  const baseDt = orderDate ? new Date(orderDate) : new Date();
+                  const dueDt = new Date(baseDt.getTime() + creditDays * 86400000);
+                  const now = new Date();
+                  const dueMidnight = new Date(dueDt.getFullYear(), dueDt.getMonth(), dueDt.getDate()).getTime();
+                  const nowMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+                  const daysLeft = Math.round((dueMidnight - nowMidnight) / 86400000);
+                  const isOverdue = payStatus !== "cleared" && daysLeft < 0;
+
+                  return (
+                    <div style={{ flex: 1, minWidth: 180, fontSize: 12, display: "flex", flexDirection: "column", gap: 3 }}>
+                      <div>Due Date: <strong>{dueDt.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</strong></div>
+                      <div>
+                        {payStatus === "cleared" ? (
+                          <span className="badge badge-success" style={{ fontSize: 11 }}>✓ Fully Paid</span>
+                        ) : isOverdue ? (
+                          <span className="badge" style={{ background: "#fee2e2", color: "#dc2626", border: "1px solid #f87171", fontWeight: 800, fontSize: 11 }}>
+                            🔴 Due date passed ({Math.abs(daysLeft)} days overdue)
+                          </span>
+                        ) : daysLeft === 0 ? (
+                          <span className="badge" style={{ background: "#fef3c7", color: "#b45309", fontWeight: 700, fontSize: 11 }}>
+                            ⚠️ Due today
+                          </span>
+                        ) : (
+                          <span className="badge" style={{ background: "#eff6ff", color: "#1d4ed8", fontWeight: 700, fontSize: 11 }}>
+                            ⏳ {daysLeft} days left
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
+
           <div className="field">
             <label>Notes (optional)</label>
             <textarea className="input" value={notes} onChange={e => setNotes(e.target.value)} placeholder="Any remarks…" rows={2} />

@@ -36,6 +36,7 @@ export default function Billing() {
   const [customerPhone, setCustomerPhone] = useState("");
   const [refNo, setRefNo] = useState(`BILL-${Math.floor(1000 + Math.random() * 9000)}`);
   const [billDate, setBillDate] = useState(toInputDate(null));
+  const [creditDays, setCreditDays] = useState<number>(15);
   const [payMethod, setPayMethod] = useState("UPI");
   const [paidAmount, setPaidAmount] = useState<string>("");
   const [notes, setNotes] = useState("1 Year Brand Warranty. Thank you for your business!");
@@ -142,6 +143,7 @@ export default function Billing() {
   function resetForm() {
     setRefNo(`BILL-${Math.floor(1000 + Math.random() * 9000)}`);
     setBillDate(toInputDate(null));
+    setCreditDays(15);
     setDealerId("");
     setCustomerName("");
     setCustomerPhone("");
@@ -174,12 +176,21 @@ export default function Billing() {
         ? (billDate.includes("T") ? billDate : `${billDate}T12:00:00.000Z`)
         : new Date().toISOString();
 
+      const baseDt = billDate ? new Date(billDate) : new Date();
+      const dueDateIso = new Date(baseDt.getTime() + creditDays * 86400000).toISOString();
+      const nowMidnight = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()).getTime();
+      const dueMidnight = new Date(new Date(dueDateIso).getFullYear(), new Date(dueDateIso).getMonth(), new Date(dueDateIso).getDate()).getTime();
+      const daysLeft = Math.round((dueMidnight - nowMidnight) / 86400000);
+      const isDuePassed = balanceDue > 0.5 && daysLeft < 0;
+
       const orderBody = {
         kind: "sale",
         party_id: customerType === "dealer" ? dealerId : null,
         party_name: effectiveCustomerName.trim(),
         ref_no: refNo.trim() || undefined,
         date: isoDate,
+        credit_days: creditDays,
+        due_date: dueDateIso,
         notes: `${notes.trim()}${payMethod ? ` [Payment: ${payMethod}]` : ""}${effectivePhone ? ` [Phone: ${effectivePhone}]` : ""}`,
         items: lines.map((l) => ({
           product_id: l.product_id,
@@ -208,6 +219,10 @@ export default function Billing() {
         total: totalAmount,
         paid: numericPaid,
         balance: balanceDue,
+        creditDays,
+        dueDate: dueDateIso,
+        daysLeft,
+        isDuePassed,
         payMethod,
         notes,
       };
@@ -257,6 +272,12 @@ export default function Billing() {
     }
   }
 
+  const previewDueDt = new Date(new Date(billDate || Date.now()).getTime() + creditDays * 86400000);
+  const nowMid = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()).getTime();
+  const dueMid = new Date(previewDueDt.getFullYear(), previewDueDt.getMonth(), previewDueDt.getDate()).getTime();
+  const previewDaysLeft = Math.round((dueMid - nowMid) / 86400000);
+  const previewIsDuePassed = balanceDue > 0.5 && previewDaysLeft < 0;
+
   const previewBillData: BillData = {
     refNo,
     date: billDate,
@@ -271,6 +292,10 @@ export default function Billing() {
     total: totalAmount,
     paid: numericPaid,
     balance: balanceDue,
+    creditDays,
+    dueDate: previewDueDt.toISOString(),
+    daysLeft: previewDaysLeft,
+    isDuePassed: previewIsDuePassed,
     payMethod,
     notes,
   };
@@ -567,6 +592,60 @@ export default function Billing() {
               </div>
             </div>
 
+            {/* Credit Terms & Due Date */}
+            <div style={{ background: "var(--surface-2)", padding: "var(--s3)", borderRadius: "var(--r-sm)", display: "flex", flexDirection: "column", gap: "var(--s2)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <label style={{ fontWeight: 700, fontSize: 13, margin: 0 }}>Credit Period &amp; Due Date</label>
+                <span style={{ fontSize: 12, color: "var(--muted)" }}>Credit days can be edited</span>
+              </div>
+              <div style={{ display: "flex", gap: "var(--s2)", flexWrap: "wrap" }}>
+                {[0, 7, 15, 30, 45, 60].map(days => (
+                  <button
+                    key={days}
+                    type="button"
+                    className={`btn btn-xs ${creditDays === days ? "btn-primary" : "btn-outline"}`}
+                    onClick={() => setCreditDays(days)}
+                  >
+                    {days === 0 ? "Immediate (0d)" : `${days} Days`}
+                  </button>
+                ))}
+              </div>
+              <div style={{ display: "flex", gap: "var(--s3)", alignItems: "center", marginTop: 2, flexWrap: "wrap" }}>
+                <div style={{ flex: "0 0 140px" }}>
+                  <label style={{ fontSize: 11, color: "var(--muted)", marginBottom: 2 }}>Credit Days</label>
+                  <input
+                    className="input input-sm"
+                    type="number"
+                    min={0}
+                    max={365}
+                    value={creditDays}
+                    onChange={e => setCreditDays(Math.max(0, parseInt(e.target.value) || 0))}
+                    placeholder="15"
+                  />
+                </div>
+                <div style={{ flex: 1, minWidth: 170, fontSize: 12, display: "flex", flexDirection: "column", gap: 2 }}>
+                  <div>Due Date: <strong>{previewDueDt.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</strong></div>
+                  <div>
+                    {balanceDue <= 0.5 ? (
+                      <span className="badge badge-success" style={{ fontSize: 11 }}>✓ Fully Settled (₹0 Due)</span>
+                    ) : previewIsDuePassed ? (
+                      <span className="badge" style={{ background: "#fee2e2", color: "#dc2626", border: "1px solid #f87171", fontWeight: 800, fontSize: 11 }}>
+                        🔴 Due date passed ({Math.abs(previewDaysLeft)} days overdue)
+                      </span>
+                    ) : previewDaysLeft === 0 ? (
+                      <span className="badge" style={{ background: "#fef3c7", color: "#b45309", fontWeight: 700, fontSize: 11 }}>
+                        ⚠️ Due today
+                      </span>
+                    ) : (
+                      <span className="badge" style={{ background: "#eff6ff", color: "#1d4ed8", fontWeight: 700, fontSize: 11 }}>
+                        ⏳ {previewDaysLeft} days left
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <div className="field">
               <label>Bill Terms / Notes</label>
               <input
@@ -605,6 +684,34 @@ export default function Billing() {
                 {formatINR(balanceDue)}
               </span>
             </div>
+
+            {balanceDue > 0.5 && (
+              <div style={{ borderTop: "1px dashed var(--border)", paddingTop: 8, display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ color: "var(--muted)" }}>Credit Allowed:</span>
+                  <span style={{ fontWeight: 700 }}>{creditDays} Days</span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ color: "var(--muted)" }}>Due Date:</span>
+                  <span style={{ fontWeight: 700 }}>{previewDueDt.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 2 }}>
+                  {previewIsDuePassed ? (
+                    <span className="badge" style={{ background: "#fee2e2", color: "#dc2626", border: "1px solid #f87171", fontWeight: 800 }}>
+                      🔴 Due date passed ({Math.abs(previewDaysLeft)} days overdue)
+                    </span>
+                  ) : previewDaysLeft === 0 ? (
+                    <span className="badge" style={{ background: "#fef3c7", color: "#b45309", fontWeight: 700 }}>
+                      ⚠️ Due today
+                    </span>
+                  ) : (
+                    <span className="badge" style={{ background: "#eff6ff", color: "#1d4ed8", fontWeight: 700 }}>
+                      ⏳ {previewDaysLeft} days left
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Fast Trigger Buttons */}
             <div style={{ display: "flex", flexDirection: "column", gap: "var(--s2)", marginTop: "var(--s2)" }}>

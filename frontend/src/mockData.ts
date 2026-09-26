@@ -79,6 +79,7 @@ export const SEED_ORDERS = [
     party_id: "d1",
     party_name: "Shree Samartha Electronics",
     ref_no: "INV-2026-001",
+    credit_days: 15,
     date: new Date(Date.now() - 3 * 86400000).toISOString(),
     notes: "Delivery via Chhota Hathi",
     items: [
@@ -194,6 +195,29 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
       const dt = new Date(dateStr);
       age_days = Math.max(0, Math.floor((Date.now() - dt.getTime()) / 86400000));
     } catch {}
+
+    const isSale = o.kind === "sale" || (!o.kind && !!o.party_id);
+    const credit_days = o.credit_days !== undefined && o.credit_days !== null && o.credit_days !== ""
+      ? Math.max(0, parseInt(String(o.credit_days), 10) || 0)
+      : (isSale ? 15 : 0);
+
+    let due_date = o.due_date;
+    let days_left = 0;
+    let is_due_passed = false;
+    try {
+      const dt = new Date(dateStr);
+      if (!due_date) {
+        const dueDt = new Date(dt.getTime() + credit_days * 86400000);
+        due_date = dueDt.toISOString();
+      }
+      const dueDt = new Date(due_date);
+      const now = new Date();
+      const dueMidnight = new Date(dueDt.getFullYear(), dueDt.getMonth(), dueDt.getDate()).getTime();
+      const nowMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+      days_left = Math.round((dueMidnight - nowMidnight) / 86400000);
+      is_due_passed = balance > 0.5 && days_left < 0;
+    } catch {}
+
     return {
       ...o,
       total,
@@ -202,6 +226,10 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
       balance,
       pay_status,
       age_days: balance > 0.5 ? age_days : 0,
+      credit_days,
+      due_date,
+      days_left,
+      is_due_passed,
     };
   }
 
@@ -237,6 +265,12 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
       });
     }
 
+    const credit_days = ordBody.credit_days !== undefined && ordBody.credit_days !== null && ordBody.credit_days !== ""
+      ? Math.max(0, parseInt(String(ordBody.credit_days), 10) || 0)
+      : (kind === "sale" ? 15 : 0);
+    const orderDateStr = ordBody.date || new Date().toISOString();
+    const dueDate = ordBody.due_date || new Date(new Date(orderDateStr).getTime() + credit_days * 86400000).toISOString();
+
     const refPrefix = kind === "sale" ? "INV-" : "PO-";
     const newOrder = {
       ...ordBody,
@@ -245,7 +279,9 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
       party_id: kind === "sale" ? (ordBody.party_id || null) : null,
       party_name: ordBody.party_name || (kind === "sale" ? "Dealer" : "Supplier"),
       ref_no: ordBody.ref_no || `${refPrefix}${Math.floor(1000 + Math.random() * 9000)}`,
-      date: ordBody.date || new Date().toISOString(),
+      date: orderDateStr,
+      credit_days,
+      due_date: dueDate,
       notes: ordBody.notes || "",
       items,
       total,
@@ -306,12 +342,20 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
       }
     }
 
+    const newCreditDays = ordBody.credit_days !== undefined && ordBody.credit_days !== null && ordBody.credit_days !== ""
+      ? Math.max(0, parseInt(String(ordBody.credit_days), 10) || 0)
+      : (existing.credit_days !== undefined ? existing.credit_days : (existing.kind === "sale" ? 15 : 0));
+    const effectiveDate = ordBody.date || existing.date || new Date().toISOString();
+    const newDueDate = ordBody.due_date || (newCreditDays !== undefined ? new Date(new Date(effectiveDate).getTime() + newCreditDays * 86400000).toISOString() : existing.due_date);
+
     const updated = {
       ...existing,
       party_id: ordBody.party_id !== undefined ? ordBody.party_id : existing.party_id,
       party_name: ordBody.party_name !== undefined ? ordBody.party_name : existing.party_name,
       ref_no: ordBody.ref_no !== undefined ? ordBody.ref_no : existing.ref_no,
-      date: ordBody.date || existing.date,
+      date: effectiveDate,
+      credit_days: newCreditDays,
+      due_date: newDueDate,
       notes: ordBody.notes !== undefined ? ordBody.notes : existing.notes,
       items: newItems,
       total,
@@ -616,6 +660,24 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
     }
   }
 
+  // Update Credit Days: /(orders|purchases|sales)/:id/credit-days
+  const creditDaysMatch = p.match(/^\/(orders|purchases|sales)\/([^/]+)\/credit-days$/);
+  if (creditDaysMatch && (method === "PATCH" || method === "POST" || method === "PUT")) {
+    const oid = creditDaysMatch[2];
+    const orders = getStored<any[]>("orders", SEED_ORDERS);
+    const o = orders.find((item) => item.id === oid);
+    if (!o) throw new Error("Order not found: " + oid);
+
+    const days = Math.max(0, parseInt(String(body?.credit_days), 10) || 0);
+    o.credit_days = days;
+    const baseDate = o.date || new Date().toISOString();
+    o.due_date = new Date(new Date(baseDate).getTime() + days * 86400000).toISOString();
+    o.updated_at = new Date().toISOString();
+    setStored("orders", orders);
+    syncOrderToFirestore(o);
+    return serializeOrder(o);
+  }
+
   // Dashboard & Reports
   if (p === "/dashboard" || p === "/reports") {
     const orders = getStored("orders", SEED_ORDERS);
@@ -650,56 +712,7 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
     const units_in_stock = products.reduce((s, p) => s + Math.max(0, p.qty_on_hand || 0), 0);
     const net_profit = total_sales - cogs - total_expenses;
 
-    const low_stock = products.filter((p) => (Number(p.qty_on_hand) || 0) > 0 && (Number(p.qty_on_hand) || 0) <= 2);
-    const out_of_stock = products.filter((p) => (Number(p.qty_on_hand) || 0) === 0);
-    const negative_stock = products.filter((p) => (Number(p.qty_on_hand) || 0) < 0);
-
-    const recent_sales = sales.slice(0, 5).map((o) => {
-      const paid = (o.payments || []).reduce((s: number, pm: any) => s + pm.amount, 0);
-      const balance = Math.max(0, o.total - paid);
-      const pay_status = balance <= 0.5 ? "cleared" : paid > 0 ? "partial" : "unpaid";
-      return { ...o, paid, balance, pay_status };
-    });
-
-    // Available stock details for the dashboard
-    const available_stock = products.map((p) => {
-      const q = Number(p.qty_on_hand) || 0;
-      return {
-        id: p.id,
-        model: p.model,
-        sku: p.sku || "",
-        category: p.category || "Television",
-        purchased_qty: Number((p as any).purchased_qty) || 0,
-        sold_qty: Number((p as any).sold_qty) || 0,
-        qty_on_hand: q,
-        cost_price: Number(p.cost_price) || 0,
-        sell_price: Number(p.sell_price) || 0,
-        status: q < 0 ? "negative" : q === 0 ? "out" : q <= 2 ? "low" : "available",
-      };
-    });
-
-    const summary = {
-      total_sales,
-      total_purchases,
-      total_expenses,
-      cogs,
-      gross_profit: total_sales - cogs,
-      net_profit,
-      receivable,
-      payable,
-      inventory_value,
-      units_in_stock,
-      sales_count: sales.length,
-      purchases_count: purchases.length,
-      low_stock,
-      negative_stock,
-      available_stock,
-      recent_sales,
-    };
-
-    if (p === "/dashboard") return summary;
-
-    // Reports additions: Dynamic Month Aggregation
+    // Helper: Dynamic Month Key
     const getMonthKey = (dateStr?: string) => {
       try {
         if (!dateStr) return new Date().toISOString().slice(0, 7);
@@ -712,6 +725,7 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
     const sales_by_month: Record<string, number> = {};
     const purchases_by_month: Record<string, number> = {};
     const sales_units_by_month: Record<string, number> = {};
+    const expenses_by_month: Record<string, number> = {};
     const model_monthly_map: Record<string, Record<string, { qty: number; amount: number }>> = {};
     const monthly_metrics: Record<string, { month: string; sales: number; purchases: number; cogs: number; gross_profit: number; units: number; top_model?: string }> = {};
 
@@ -756,6 +770,11 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
       monthly_metrics[m].purchases = Math.round((monthly_metrics[m].purchases + (Number(o.total) || 0)) * 100) / 100;
     });
 
+    expenses.forEach((e) => {
+      const m = getMonthKey(e.date);
+      expenses_by_month[m] = Math.round(((expenses_by_month[m] || 0) + (Number(e.amount) || 0)) * 100) / 100;
+    });
+
     // Compute gross profit and find top model per month
     Object.keys(monthly_metrics).forEach((m) => {
       monthly_metrics[m].gross_profit = Math.round((monthly_metrics[m].sales - monthly_metrics[m].cogs) * 100) / 100;
@@ -776,6 +795,115 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
       new Set([...Object.keys(sales_by_month), ...Object.keys(purchases_by_month)])
     ).filter(Boolean).sort();
 
+    // GST Payable calculation: (Net Sales - Net Purchase) * 18% for each month
+    const monthly_breakdown = monthKeys.map((m) => {
+      const s = sales_by_month[m] || 0;
+      const p = purchases_by_month[m] || 0;
+      const diff = Math.round((s - p) * 100) / 100;
+      const gstPayable = Math.max(0, Math.round(diff * 0.18 * 100) / 100);
+      const rawGst = Math.round(diff * 0.18 * 100) / 100;
+      const cogsM = monthly_metrics[m]?.cogs || 0;
+      const grossM = monthly_metrics[m]?.gross_profit || Math.round((s - cogsM) * 100) / 100;
+      const expM = expenses_by_month[m] || 0;
+      const netProfitPreGst = Math.round((s - cogsM - expM) * 100) / 100;
+      const netProfitPostGst = Math.round((netProfitPreGst - gstPayable) * 100) / 100;
+
+      return {
+        month: m,
+        sales: s,
+        purchases: p,
+        net_diff: diff,
+        gst_rate: 0.18,
+        gst_payable: gstPayable,
+        raw_gst: rawGst,
+        cogs: cogsM,
+        gross_profit: grossM,
+        expenses: expM,
+        net_profit: netProfitPreGst,
+        net_profit_before_gst: netProfitPreGst,
+        net_profit_after_gst: netProfitPostGst,
+        units: sales_units_by_month[m] || 0,
+        top_model: monthly_metrics[m]?.top_model || "None",
+      };
+    });
+
+    // Total GST payable: (Net Sales - Net Purchase) * 18%
+    const total_gst_taxable_base = Math.round((total_sales - total_purchases) * 100) / 100;
+    const total_gst_payable = Math.max(0, Math.round(total_gst_taxable_base * 0.18 * 100) / 100);
+    const net_profit_before_gst = Math.round(net_profit * 100) / 100;
+    const net_profit_after_gst = Math.round((net_profit - total_gst_payable) * 100) / 100;
+
+    // Current Month GST
+    const currentMonthKey = new Date().toISOString().slice(0, 7);
+    const current_month_gst = monthly_breakdown.find(mb => mb.month === currentMonthKey) || {
+      month: currentMonthKey,
+      sales: sales_by_month[currentMonthKey] || 0,
+      purchases: purchases_by_month[currentMonthKey] || 0,
+      net_diff: Math.round(((sales_by_month[currentMonthKey] || 0) - (purchases_by_month[currentMonthKey] || 0)) * 100) / 100,
+      gst_rate: 0.18,
+      gst_payable: Math.max(0, Math.round(((sales_by_month[currentMonthKey] || 0) - (purchases_by_month[currentMonthKey] || 0)) * 0.18 * 100) / 100),
+      raw_gst: Math.round(((sales_by_month[currentMonthKey] || 0) - (purchases_by_month[currentMonthKey] || 0)) * 0.18 * 100) / 100,
+      cogs: 0,
+      gross_profit: 0,
+      expenses: 0,
+      net_profit: 0,
+      net_profit_before_gst: 0,
+      net_profit_after_gst: 0,
+      units: 0,
+      top_model: "None",
+    };
+
+    const low_stock = products.filter((p) => (Number(p.qty_on_hand) || 0) > 0 && (Number(p.qty_on_hand) || 0) <= 2);
+    const out_of_stock = products.filter((p) => (Number(p.qty_on_hand) || 0) === 0);
+    const negative_stock = products.filter((p) => (Number(p.qty_on_hand) || 0) < 0);
+
+    const recent_sales = sales.slice(0, 5).map(serializeOrder);
+
+    // Available stock details for the dashboard
+    const available_stock = products.map((p) => {
+      const q = Number(p.qty_on_hand) || 0;
+      return {
+        id: p.id,
+        model: p.model,
+        sku: p.sku || "",
+        category: p.category || "Television",
+        purchased_qty: Number((p as any).purchased_qty) || 0,
+        sold_qty: Number((p as any).sold_qty) || 0,
+        qty_on_hand: q,
+        cost_price: Number(p.cost_price) || 0,
+        sell_price: Number(p.sell_price) || 0,
+        status: q < 0 ? "negative" : q === 0 ? "out" : q <= 2 ? "low" : "available",
+      };
+    });
+
+    const summary = {
+      total_sales,
+      total_purchases,
+      total_expenses,
+      cogs,
+      gross_profit: total_sales - cogs,
+      net_profit,
+      net_profit_before_gst,
+      gst_rate: 0.18,
+      gst_taxable_base: total_gst_taxable_base,
+      gst_payable: total_gst_payable,
+      net_profit_after_gst,
+      receivable,
+      payable,
+      inventory_value,
+      units_in_stock,
+      sales_count: sales.length,
+      purchases_count: purchases.length,
+      low_stock,
+      negative_stock,
+      available_stock,
+      recent_sales,
+      monthly_gst_breakdown: monthly_breakdown,
+      current_month_gst,
+    };
+
+    if (p === "/dashboard") return summary;
+
     // Model monthly series for line graphs
     const model_series = Object.entries(model_monthly_map).map(([model, mData]) => {
       const totalUnits = Object.values(mData).reduce((sum, v) => sum + v.qty, 0);
@@ -787,17 +915,7 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
         total_revenue: totalRevenue,
       };
     }).sort((a, b) => b.total_units - a.total_units);
-
     // Month-over-Month Comparison
-    const monthly_breakdown = monthKeys.map((m) => monthly_metrics[m] || {
-      month: m,
-      sales: sales_by_month[m] || 0,
-      purchases: purchases_by_month[m] || 0,
-      cogs: 0,
-      gross_profit: 0,
-      units: sales_units_by_month[m] || 0,
-      top_model: "None",
-    });
 
     let mom_comparison: any = null;
     if (monthly_breakdown.length >= 2) {
@@ -918,16 +1036,22 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
       top_dealers,
       category_breakdown,
       executive_kpis,
-      expense_by_category: exp_cat,
       overdue_receivables: sales
         .filter((o) => o.total - (o.payments || []).reduce((s: number, p: any) => s + p.amount, 0) > 0.5)
-        .map((o) => ({
-          id: o.id,
-          party_name: o.party_name,
-          ref_no: o.ref_no,
-          balance: o.total - (o.payments || []).reduce((s: number, p: any) => s + p.amount, 0),
-          age_days: 3,
-        })),
+        .map((o) => {
+          const so = serializeOrder(o);
+          return {
+            id: o.id,
+            party_name: o.party_name,
+            ref_no: o.ref_no,
+            balance: so.balance,
+            credit_days: so.credit_days,
+            due_date: so.due_date,
+            days_left: so.days_left,
+            is_due_passed: so.is_due_passed,
+            age_days: so.age_days,
+          };
+        }),
       overdue_payables: [],
     };
   }
