@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiPost, apiPut, apiDelete } from "../api";
 import { Spinner, EmptyState, ConfirmModal } from "../ui";
-import { formatINR, formatDate, toInputDate } from "../format";
+import { formatINR, formatDate, formatTime, toInputDate, combineDateWithCurrentTime } from "../format";
 import { useToast } from "../toast";
 
 const CATEGORIES = ["Transport", "Rent", "Salary", "Utilities", "Marketing", "Misc"];
@@ -54,7 +54,7 @@ export default function Expenses() {
     mutationFn: () => {
       const cleanNote = note.trim();
       const finalNote = `[${payMethod}]${cleanNote ? ` ${cleanNote}` : ""}`;
-      const body = { category, amount: parseFloat(amount) || 0, note: finalNote, date: new Date(expDate).toISOString() };
+      const body = { category, amount: parseFloat(amount) || 0, note: finalNote, date: combineDateWithCurrentTime(expDate) };
       return editId ? apiPut(`/expenses/${editId}`, body) : apiPost("/expenses", body);
     },
     onSuccess: () => { invalidate(); setOpen(false); show(editId ? "Expense updated" : "Expense added", "success"); },
@@ -102,7 +102,10 @@ export default function Expenses() {
                 {data.map((e: any) => (
                   <tr key={e.id} className="clickable" onClick={() => openEdit(e)}>
                     <td><span style={{ marginRight: 6 }}>{CAT_ICONS[e.category] || "📌"}</span><span style={{ fontWeight: 700 }}>{e.category}</span></td>
-                    <td style={{ color: "var(--muted)", fontSize: 13 }}>{formatDate(e.date)}</td>
+                    <td style={{ fontSize: 13 }}>
+                      <div style={{ fontWeight: 600, color: "var(--on-surface)" }}>{formatDate(e.date)}</div>
+                      {formatTime(e.date) && <div style={{ fontSize: 11, color: "var(--muted)" }}>{formatTime(e.date)}</div>}
+                    </td>
                     <td style={{ color: "var(--muted)", fontSize: 13 }}>{e.note || "—"}</td>
                     <td style={{ textAlign: "right", fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{formatINR(e.amount)}</td>
                     <td onClick={ev => ev.stopPropagation()}><button className="btn btn-ghost btn-icon btn-sm" style={{ color: "var(--error)" }} onClick={() => setDeleteId(e.id)}>🗑</button></td>

@@ -20,6 +20,26 @@ export function formatDate(iso: string | undefined | null): string {
   } catch { return "—"; }
 }
 
+export function formatTime(iso: string | undefined | null): string {
+  if (!iso) return "";
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return "";
+    return d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true });
+  } catch { return ""; }
+}
+
+export function formatDateTime(iso: string | undefined | null): string {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return "—";
+    const dateStr = d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+    const timeStr = d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true });
+    return `${dateStr}, ${timeStr}`;
+  } catch { return "—"; }
+}
+
 export function shortDate(iso: string | undefined | null): string {
   if (!iso) return "—";
   try {
@@ -39,6 +59,28 @@ export function toInputDate(iso: string | undefined | null): string {
   } catch {
     return new Date().toISOString().slice(0, 10);
   }
+}
+
+/**
+ * Ensures an ISO timestamp has the exact creation time preserved.
+ * If only a date (YYYY-MM-DD) is provided, it incorporates the current clock time.
+ */
+export function combineDateWithCurrentTime(dateStr?: string | null): string {
+  const now = new Date();
+  if (!dateStr) return now.toISOString();
+  if (dateStr.includes("T") || (dateStr.includes(":") && dateStr.includes("-"))) {
+    try {
+      const parsed = new Date(dateStr);
+      if (!isNaN(parsed.getTime())) return parsed.toISOString();
+    } catch {}
+  }
+  const parts = dateStr.slice(0, 10).split("-").map(Number);
+  if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
+    const [y, m, d] = parts;
+    const constructed = new Date(y, m - 1, d, now.getHours(), now.getMinutes(), now.getSeconds(), now.getMilliseconds());
+    return constructed.toISOString();
+  }
+  return now.toISOString();
 }
 
 /**

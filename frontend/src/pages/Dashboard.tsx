@@ -56,9 +56,13 @@ export default function Dashboard() {
   const totalSales = Number(data.total_sales) || 0;
   const totalPurchases = Number(data.total_purchases) || 0;
   const netProfitPreGst = Number(data.net_profit_before_gst ?? data.net_profit) || 0;
-  const totalGstPayable = Number(data.gst_payable ?? data.total_gst_payable ?? Math.max(0, (totalSales - totalPurchases) * 0.18)) || 0;
-  const netProfitPostGst = Number(data.net_profit_after_gst ?? (netProfitPreGst - totalGstPayable)) || 0;
   const monthlyGstList: any[] = data.monthly_gst_breakdown || data.monthly_breakdown || [];
+  
+  // Real-time calculation from monthly timeline
+  const totalGstPayable = Number(data.gst_payable ?? 0);
+  const activeGstReceivable = Number(data.gst_receivable ?? data.accumulated_credit ?? 0);
+  // Net Profit (After GST) = Net Profit - GST Payable (receivable never modifies profit)
+  const netProfitPostGst = Number(data.net_profit_after_gst ?? (netProfitPreGst - totalGstPayable));
 
   const kpis = [
     { label: "Total Sales", value: formatINRCompact(totalSales), icon: "📈", color: "var(--brand)", bg: "var(--brand-ter)" },
@@ -74,10 +78,14 @@ export default function Dashboard() {
       label: "GST Payable (18%)",
       value: formatINRCompact(totalGstPayable),
       icon: "🏛️",
-      color: "#d97706",
-      bg: "rgba(245, 158, 11, 0.15)",
-      subtitle: `(Sales - Purchases) × 18%`,
-      badge: "18% GST",
+      color: totalGstPayable > 0 ? "#dc2626" : "#10b981",
+      bg: totalGstPayable > 0 ? "rgba(239, 68, 68, 0.15)" : "rgba(16, 185, 129, 0.15)",
+      subtitle: totalGstPayable > 0 
+        ? `Remit on portal (${formatINR(totalGstPayable)})` 
+        : activeGstReceivable > 0 
+          ? `Credit: ${formatINRCompact(activeGstReceivable)} on portal` 
+          : `(Sales - Purchases) × 18%`,
+      badge: totalGstPayable > 0 ? "Due on Portal" : activeGstReceivable > 0 ? "ITC Carried Fwd" : "₹0 Due",
     },
     {
       label: "Net Profit (After GST)",
@@ -148,13 +156,18 @@ export default function Dashboard() {
             <div>
               <h2 style={{ fontSize: 16, fontWeight: 800, margin: 0 }}>🏛️ Net Profit After GST Deduction</h2>
               <p style={{ fontSize: 13, color: "var(--muted)", margin: "2px 0 0 0" }}>
-                Formula: <strong>Net Profit after GST = Net Profit - GST Payable</strong> · GST Payable = (Net Sales - Net Purchase) × 18%
+                Formula: <strong>Net Profit after GST = Net Profit - GST Payable</strong> (GST Receivable is never added to net profit)
               </p>
             </div>
             <div style={{ display: "flex", gap: "var(--s2)", alignItems: "center" }}>
               <span className="badge badge-brand" style={{ fontWeight: 800, padding: "4px 10px", fontSize: 12 }}>
                 18% GST Rate
               </span>
+              {activeGstReceivable > 0 && (
+                <span className="badge" style={{ background: "rgba(59, 130, 246, 0.15)", color: "#2563eb", fontWeight: 700, padding: "4px 10px", fontSize: 12, border: "1px solid rgba(59, 130, 246, 0.3)" }}>
+                  🏛️ Portal Credit: {formatINR(activeGstReceivable)}
+                </span>
+              )}
             </div>
           </div>
 
@@ -169,10 +182,16 @@ export default function Dashboard() {
 
             <div style={{ padding: "var(--s4)", background: "var(--surface)", borderRadius: "var(--r-md)", border: "1px solid var(--border)" }}>
               <div style={{ fontSize: 11, color: "var(--muted)", fontWeight: 700, textTransform: "uppercase" }}>2. GST Payable (18%)</div>
-              <div style={{ fontSize: 24, fontWeight: 800, color: "#d97706", marginTop: 4 }}>
+              <div style={{ fontSize: 24, fontWeight: 800, color: totalGstPayable > 0 ? "#dc2626" : "var(--success)", marginTop: 4 }}>
                 - {formatINR(totalGstPayable)}
               </div>
-              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>(Sales {formatINRCompact(totalSales)} - Purchases {formatINRCompact(totalPurchases)}) × 18%</div>
+              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+                {totalGstPayable > 0
+                  ? `Subtracted from Net Profit to remit on government portal`
+                  : activeGstReceivable > 0
+                    ? `Purchases > Sales: ${formatINR(activeGstReceivable)} is GST Receivable on portal. Carried forward to offset next month; ₹0 subtracted from profit.`
+                    : `No GST liability · ₹0 subtracted from net profit`}
+              </div>
             </div>
 
             <div style={{ padding: "var(--s4)", background: netProfitPostGst >= 0 ? "rgba(16, 185, 129, 0.08)" : "rgba(239, 68, 68, 0.08)", borderRadius: "var(--r-md)", border: netProfitPostGst >= 0 ? "1px solid rgba(16, 185, 129, 0.4)" : "1px solid rgba(239, 68, 68, 0.4)" }}>
@@ -180,7 +199,11 @@ export default function Dashboard() {
               <div style={{ fontSize: 26, fontWeight: 900, color: netProfitPostGst >= 0 ? "var(--success)" : "var(--error)", marginTop: 4 }}>
                 {formatINR(netProfitPostGst)}
               </div>
-              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>Subtracted from Net Profit for true distributable earnings</div>
+              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+                {totalGstPayable > 0
+                  ? `True distributable earnings after deducting actual GST payable`
+                  : `Protected! Fully intact since no GST is payable this period`}
+              </div>
             </div>
           </div>
         </div>
@@ -191,7 +214,7 @@ export default function Dashboard() {
             <div>
               <h2 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>📊 Monthly GST Overview (Different for Each Month)</h2>
               <p style={{ color: "var(--muted)", fontSize: 13, margin: "2px 0 0 0" }}>
-                Each month has a different GST payable based on that month's net sales minus net purchases × 18%
+                Each month has a different GST based on (Sales - Purchases) × 18%. Excess purchase GST is credited on government portal and offsets next month's payable.
               </p>
             </div>
             <div className="chip-bar" style={{ display: "flex", gap: 4, overflowX: "auto", maxWidth: "100%" }}>
@@ -221,7 +244,10 @@ export default function Dashboard() {
                   <th style={{ padding: "var(--s3) var(--s4)", textAlign: "right" }}>Net Sales</th>
                   <th style={{ padding: "var(--s3) var(--s4)", textAlign: "right" }}>Net Purchases</th>
                   <th style={{ padding: "var(--s3) var(--s4)", textAlign: "right" }}>Taxable Base (Sales - Purchase)</th>
-                  <th style={{ padding: "var(--s3) var(--s4)", textAlign: "right" }}>GST Payable (18%)</th>
+                  <th style={{ padding: "var(--s3) var(--s4)", textAlign: "right" }}>Raw GST (18%)</th>
+                  <th style={{ padding: "var(--s3) var(--s4)", textAlign: "right" }}>Credit Offset</th>
+                  <th style={{ padding: "var(--s3) var(--s4)", textAlign: "right" }}>GST Payable (Portal)</th>
+                  <th style={{ padding: "var(--s3) var(--s4)", textAlign: "right" }}>Carried to Next Month</th>
                   <th style={{ padding: "var(--s3) var(--s4)", textAlign: "right" }}>Net Profit (Pre-GST)</th>
                   <th style={{ padding: "var(--s3) var(--s4)", textAlign: "right" }}>Net Profit (After GST)</th>
                   <th style={{ padding: "var(--s3) var(--s4)", textAlign: "center" }}>Status</th>
@@ -230,14 +256,17 @@ export default function Dashboard() {
               <tbody>
                 {monthlyGstList.length === 0 ? (
                   <tr>
-                    <td colSpan={8} style={{ padding: "var(--s5)", textAlign: "center", color: "var(--muted)" }}>
+                    <td colSpan={11} style={{ padding: "var(--s5)", textAlign: "center", color: "var(--muted)" }}>
                       No monthly order data recorded yet.
                     </td>
                   </tr>
                 ) : (
                   (selectedGstMonth === "all" ? monthlyGstList : monthlyGstList.filter((m: any) => m.month === selectedGstMonth)).map((m: any) => {
                     const diff = m.net_diff !== undefined ? m.net_diff : (m.sales - m.purchases);
-                    const gst = m.gst_payable !== undefined ? m.gst_payable : Math.max(0, Math.round(diff * 0.18 * 100) / 100);
+                    const rawGst = m.raw_gst !== undefined ? m.raw_gst : Math.round(diff * 0.18 * 100) / 100;
+                    const creditUsed = m.credit_used || 0;
+                    const gst = m.gst_payable || 0;
+                    const carriedFwd = m.accumulated_credit || 0;
                     const netPre = m.net_profit_before_gst !== undefined ? m.net_profit_before_gst : m.net_profit || 0;
                     const netPost = m.net_profit_after_gst !== undefined ? m.net_profit_after_gst : (netPre - gst);
 
@@ -252,11 +281,20 @@ export default function Dashboard() {
                         <td style={{ padding: "var(--s3) var(--s4)", textAlign: "right", color: "var(--warning)", fontWeight: 600 }}>
                           {formatINR(m.purchases || 0)}
                         </td>
-                        <td style={{ padding: "var(--s3) var(--s4)", textAlign: "right", fontWeight: 600, color: diff >= 0 ? "var(--on-surface)" : "var(--muted)" }}>
+                        <td style={{ padding: "var(--s3) var(--s4)", textAlign: "right", fontWeight: 600, color: diff >= 0 ? "var(--on-surface)" : "var(--error)" }}>
                           {formatINR(diff)}
                         </td>
-                        <td style={{ padding: "var(--s3) var(--s4)", textAlign: "right", fontWeight: 800, color: gst > 0 ? "#d97706" : "var(--muted)" }}>
+                        <td style={{ padding: "var(--s3) var(--s4)", textAlign: "right", fontWeight: 700, color: rawGst < 0 ? "var(--info)" : "var(--on-surface)" }}>
+                          {rawGst < 0 ? `- ${formatINR(Math.abs(rawGst))}` : `+ ${formatINR(rawGst)}`}
+                        </td>
+                        <td style={{ padding: "var(--s3) var(--s4)", textAlign: "right", color: creditUsed > 0 ? "var(--success)" : "var(--muted)", fontWeight: 600 }}>
+                          {creditUsed > 0 ? `- ${formatINR(creditUsed)}` : "—"}
+                        </td>
+                        <td style={{ padding: "var(--s3) var(--s4)", textAlign: "right", fontWeight: 800, color: gst > 0 ? "#dc2626" : "var(--muted)" }}>
                           {formatINR(gst)}
+                        </td>
+                        <td style={{ padding: "var(--s3) var(--s4)", textAlign: "right", fontWeight: 700, color: carriedFwd > 0 ? "var(--info)" : "var(--muted)" }}>
+                          {carriedFwd > 0 ? formatINR(carriedFwd) : "—"}
                         </td>
                         <td style={{ padding: "var(--s3) var(--s4)", textAlign: "right", fontWeight: 600 }}>
                           {formatINR(netPre)}
@@ -266,12 +304,16 @@ export default function Dashboard() {
                         </td>
                         <td style={{ padding: "var(--s3) var(--s4)", textAlign: "center" }}>
                           {gst > 0 ? (
-                            <span className="badge" style={{ background: "rgba(245, 158, 11, 0.15)", color: "#b45309", fontWeight: 700 }}>
+                            <span className="badge" style={{ background: "rgba(239, 68, 68, 0.15)", color: "#dc2626", fontWeight: 700, border: "1px solid rgba(239, 68, 68, 0.3)" }}>
                               🏛️ Tax Payable
+                            </span>
+                          ) : rawGst < 0 ? (
+                            <span className="badge" style={{ background: "rgba(59, 130, 246, 0.15)", color: "#2563eb", fontWeight: 700, border: "1px solid rgba(59, 130, 246, 0.3)" }}>
+                              🏛️ GST Receivable
                             </span>
                           ) : (
                             <span className="badge badge-success" style={{ fontWeight: 600 }}>
-                              ✓ ITC Surplus
+                              ✓ Covered by ITC
                             </span>
                           )}
                         </td>

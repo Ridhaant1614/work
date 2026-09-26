@@ -987,11 +987,13 @@ export default function Reports() {
               </div>
 
               <div style={{ padding: "var(--s4)", borderRadius: "var(--r-md)", background: "var(--surface-2)", border: "1px solid rgba(220, 38, 38, 0.25)" }}>
-                <div style={{ fontSize: 12, color: "var(--error)", fontWeight: 700, textTransform: "uppercase" }}>GST Payable (18%)</div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: "var(--error)", marginTop: 4 }}>
+                <div style={{ fontSize: 12, color: totalGstPayable > 0 ? "var(--error)" : "var(--muted)", fontWeight: 700, textTransform: "uppercase" }}>GST Payable (18%)</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: totalGstPayable > 0 ? "var(--error)" : "var(--success)", marginTop: 4 }}>
                   - {formatINR(totalGstPayable)}
                 </div>
-                <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>(Net Sales - Purchases) × 18%</div>
+                <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+                  {totalGstPayable > 0 ? "Remitted on portal" : "Protected (₹0 tax payable)"}
+                </div>
               </div>
 
               <div style={{ padding: "var(--s4)", borderRadius: "var(--r-md)", background: netProfitAfterGst >= 0 ? "var(--success-bg)" : "var(--error-bg)", border: `1px solid ${netProfitAfterGst >= 0 ? "var(--success)" : "var(--error)"}` }}>

@@ -3,7 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiPost, apiPatch, apiPut, apiDelete } from "../api";
 import { Spinner, PayBadge, ConfirmModal } from "../ui";
-import { formatINR, formatDate } from "../format";
+import { formatINR, formatDate, formatDateTime } from "../format";
 import { useToast } from "../toast";
 import { type BillData, printTaxInvoice } from "../receipt";
 import { WhatsAppModal } from "../WhatsAppModal";
@@ -242,7 +242,7 @@ export default function OrderDetail({ kind }: { kind: Kind }) {
           </button>
           <div>
             <h1>{isSale ? "Sale Invoice" : "Purchase Order"}: {o.ref_no || o.id}</h1>
-            <p>{formatDate(o.date)} · {o.party_name}</p>
+            <p>{formatDateTime(o.date)} · {o.party_name}</p>
           </div>
         </div>
         <div className="page-header-actions">
@@ -489,7 +489,7 @@ export default function OrderDetail({ kind }: { kind: Kind }) {
                           +{formatINR(p.amount)}
                         </span>
                         <div style={{ display: "flex", alignItems: "center", gap: "var(--s2)" }}>
-                          <span style={{ fontSize: 12, color: "var(--muted)" }}>{formatDate(p.date)}</span>
+                          <span style={{ fontSize: 12, color: "var(--muted)" }}>{formatDateTime(p.date)}</span>
                           <button
                             className="btn btn-ghost btn-sm btn-icon"
                             title="Edit this payment"

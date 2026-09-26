@@ -3,7 +3,7 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiPost, apiPut } from "../api";
 import { Spinner } from "../ui";
-import { formatINR, toInputDate } from "../format";
+import { formatINR, toInputDate, combineDateWithCurrentTime } from "../format";
 import { useToast } from "../toast";
 
 type Line = { key: string; product_id: string; model: string; qty: string; rate: string };
@@ -66,9 +66,7 @@ export default function OrderForm({ kind }: { kind: Kind }) {
 
   const mutation = useMutation({
     mutationFn: () => {
-      const isoDate = orderDate
-        ? (orderDate.includes("T") ? orderDate : `${orderDate}T12:00:00.000Z`)
-        : new Date().toISOString();
+      const isoDate = combineDateWithCurrentTime(orderDate);
       const calculatedPaid = payStatus === "cleared" ? total : payStatus === "unpaid" ? 0 : parseFloat(amountPaid) || 0;
       const paymentTag = payStatus !== "unpaid" ? `[Payment: ${payMethod}]` : "";
       const finalNotes = notes.trim()

@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { apiGet, apiPost } from "../api";
 import { Spinner } from "../ui";
-import { formatINR, toInputDate } from "../format";
+import { formatINR, toInputDate, combineDateWithCurrentTime } from "../format";
 import { useToast } from "../toast";
 import {
   type BillData,
@@ -172,11 +172,8 @@ export default function Billing() {
         }
       }
 
-      const isoDate = billDate
-        ? (billDate.includes("T") ? billDate : `${billDate}T12:00:00.000Z`)
-        : new Date().toISOString();
-
-      const baseDt = billDate ? new Date(billDate) : new Date();
+      const isoDate = combineDateWithCurrentTime(billDate);
+      const baseDt = new Date(isoDate);
       const dueDateIso = new Date(baseDt.getTime() + creditDays * 86400000).toISOString();
       const nowMidnight = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()).getTime();
       const dueMidnight = new Date(new Date(dueDateIso).getFullYear(), new Date(dueDateIso).getMonth(), new Date(dueDateIso).getDate()).getTime();

@@ -785,13 +785,6 @@ async def _compute_summary():
     units_in_stock = int(sum(max(0.0, float(p.get("qty_on_hand", 0))) for p in products))
     net_profit = round(total_sales - cogs - total_expenses, 2)
 
-    # GST calculations: (Net Sales - Net Purchase) * 18%
-    gst_rate = 0.18
-    gst_taxable_base = round(total_sales - total_purchases, 2)
-    gst_payable = max(0.0, round(gst_taxable_base * gst_rate, 2))
-    net_profit_before_gst = net_profit
-    net_profit_after_gst = round(net_profit - gst_payable, 2)
-
     # Monthly aggregation
     sales_by_month = {}
     purchases_by_month = {}
@@ -807,21 +800,57 @@ async def _compute_summary():
             purchases_by_month[m] = round(purchases_by_month.get(m, 0.0) + float(o.get("total", 0)), 2)
             months_set.add(m)
 
+    # Chronological GST carryover calculation:
+    # If purchase > sales, (sales - purchase) * 18% is negative -> this is GST Receivable (ITC balance on portal).
+    # GST Receivable NEVER changes or increases net profit (0 subtracted).
+    # Carried forward GST receivable is subtracted from next month's GST payable.
+    # If next month's GST payable > carried receivable, only then does the remaining payable impact that month's net profit!
+    accumulated_credit = 0.0
     monthly_gst_breakdown = []
     for m in sorted(list(months_set)):
         ms = sales_by_month.get(m, 0.0)
         mp = purchases_by_month.get(m, 0.0)
         diff = round(ms - mp, 2)
-        mgst = max(0.0, round(diff * 0.18, 2))
+        raw_gst = round(diff * 0.18, 2)
+        opening_credit = accumulated_credit
+        month_payable = 0.0
+        credit_used = 0.0
+        month_receivable = 0.0
+
+        if raw_gst < 0:
+            month_receivable = abs(raw_gst)
+            accumulated_credit = round(accumulated_credit + month_receivable, 2)
+            month_payable = 0.0
+            credit_used = 0.0
+        elif raw_gst > 0:
+            if raw_gst > accumulated_credit:
+                month_payable = round(raw_gst - accumulated_credit, 2)
+                credit_used = accumulated_credit
+                accumulated_credit = 0.0
+            else:
+                month_payable = 0.0
+                credit_used = raw_gst
+                accumulated_credit = round(accumulated_credit - raw_gst, 2)
+
         monthly_gst_breakdown.append({
             "month": m,
             "sales": ms,
             "purchases": mp,
             "net_diff": diff,
             "gst_rate": 0.18,
-            "gst_payable": mgst,
-            "raw_gst": round(diff * 0.18, 2),
+            "raw_gst": raw_gst,
+            "opening_credit": opening_credit,
+            "credit_used": credit_used,
+            "gst_receivable": month_receivable,
+            "accumulated_credit": accumulated_credit,
+            "gst_payable": month_payable,
         })
+
+    total_gst_payable = round(sum(mb["gst_payable"] for mb in monthly_gst_breakdown), 2)
+    active_gst_receivable = accumulated_credit
+    net_profit_before_gst = net_profit
+    # Net profit after GST = net_profit - total_gst_payable (receivable never increases profit)
+    net_profit_after_gst = round(net_profit - total_gst_payable, 2)
 
     current_month_key = datetime.now(timezone.utc).strftime("%Y-%m")
     cur_m = next((item for item in monthly_gst_breakdown if item["month"] == current_month_key), None)
@@ -832,8 +861,12 @@ async def _compute_summary():
             "purchases": purchases_by_month.get(current_month_key, 0.0),
             "net_diff": round(sales_by_month.get(current_month_key, 0.0) - purchases_by_month.get(current_month_key, 0.0), 2),
             "gst_rate": 0.18,
-            "gst_payable": max(0.0, round((sales_by_month.get(current_month_key, 0.0) - purchases_by_month.get(current_month_key, 0.0)) * 0.18, 2)),
             "raw_gst": round((sales_by_month.get(current_month_key, 0.0) - purchases_by_month.get(current_month_key, 0.0)) * 0.18, 2),
+            "opening_credit": accumulated_credit,
+            "credit_used": 0.0,
+            "gst_receivable": 0.0,
+            "accumulated_credit": accumulated_credit,
+            "gst_payable": 0.0,
         }
 
     negative_stock = [clean(p) for p in products if float(p.get("qty_on_hand", 0)) < 0]
@@ -850,9 +883,11 @@ async def _compute_summary():
         "gross_profit": round(total_sales - cogs, 2),
         "net_profit": net_profit,
         "net_profit_before_gst": net_profit_before_gst,
-        "gst_rate": gst_rate,
-        "gst_taxable_base": gst_taxable_base,
-        "gst_payable": gst_payable,
+        "gst_rate": 0.18,
+        "gst_taxable_base": round(total_sales - total_purchases, 2),
+        "gst_payable": total_gst_payable,
+        "gst_receivable": active_gst_receivable,
+        "accumulated_credit": active_gst_receivable,
         "net_profit_after_gst": net_profit_after_gst,
         "receivable": receivable,
         "payable": payable,

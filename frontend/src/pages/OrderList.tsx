@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { apiGet, apiDelete, apiPatch } from "../api";
 import { PayBadge, Spinner, EmptyState, ConfirmModal } from "../ui";
-import { formatINR, shortDate } from "../format";
+import { formatINR, formatDate, formatTime, shortDate } from "../format";
 import { useToast } from "../toast";
 import { type BillData, printTaxInvoice } from "../receipt";
 import { WhatsAppModal } from "../WhatsAppModal";
@@ -241,7 +241,10 @@ export default function OrderList({ kind, title }: OrderListProps) {
                       )}
                     </td>
                     <td className="hide-mobile" style={{ color: "var(--muted)", fontSize: 13 }}>{o.ref_no || "—"}</td>
-                    <td className="hide-mobile" style={{ color: "var(--muted)", fontSize: 13 }}>{shortDate(o.date)}</td>
+                    <td className="hide-mobile" style={{ fontSize: 13 }}>
+                      <div style={{ fontWeight: 600, color: "var(--on-surface)" }}>{formatDate(o.date)}</div>
+                      {formatTime(o.date) && <div style={{ fontSize: 11, color: "var(--muted)" }}>{formatTime(o.date)}</div>}
+                    </td>
                     {kind === "sale" && (
                       <td onClick={e => { e.stopPropagation(); openQuickCredit(o); }} style={{ cursor: "pointer" }} title="Click to edit credit terms">
                         <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
