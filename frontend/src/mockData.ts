@@ -890,6 +890,7 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
         net_profit_before_gst: netProfitPreGst,
         net_profit_after_gst: netProfitPostGst,
         units: sales_units_by_month[m] || 0,
+        avg_selling_price: (sales_units_by_month[m] || 0) > 0 ? Math.round((s / sales_units_by_month[m]) * 100) / 100 : 0,
         top_model: monthly_metrics[m]?.top_model || "None",
       };
     });
@@ -1000,6 +1001,12 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
       const previous = monthly_breakdown[monthly_breakdown.length - 2];
       const salesGrowth = previous.sales > 0 ? ((current.sales - previous.sales) / previous.sales) * 100 : current.sales > 0 ? 100 : 0;
       const unitsGrowth = previous.units > 0 ? ((current.units - previous.units) / previous.units) * 100 : current.units > 0 ? 100 : 0;
+      const profitGrowth = previous.gross_profit !== 0 ? ((current.gross_profit - previous.gross_profit) / Math.abs(previous.gross_profit)) * 100 : (current.gross_profit > 0 ? 100 : 0);
+      const netProfitGrowth = previous.net_profit_after_gst !== 0 ? ((current.net_profit_after_gst - previous.net_profit_after_gst) / Math.abs(previous.net_profit_after_gst)) * 100 : (current.net_profit_after_gst > 0 ? 100 : 0);
+      const currentAsp = current.avg_selling_price || (current.units > 0 ? Math.round((current.sales / current.units) * 100) / 100 : 0);
+      const previousAsp = previous.avg_selling_price || (previous.units > 0 ? Math.round((previous.sales / previous.units) * 100) / 100 : 0);
+      const aspGrowth = previousAsp > 0 ? Math.round(((currentAsp - previousAsp) / previousAsp) * 1000) / 10 : 0;
+
       mom_comparison = {
         current_month: current.month,
         previous_month: previous.month,
@@ -1011,6 +1018,13 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
         units_growth_pct: Math.round(unitsGrowth * 10) / 10,
         current_profit: current.gross_profit,
         previous_profit: previous.gross_profit,
+        profit_growth_pct: Math.round(profitGrowth * 10) / 10,
+        current_net_profit: current.net_profit_after_gst,
+        previous_net_profit: previous.net_profit_after_gst,
+        net_profit_growth_pct: Math.round(netProfitGrowth * 10) / 10,
+        current_asp: currentAsp,
+        previous_asp: previousAsp,
+        asp_growth_pct: aspGrowth,
       };
     }
 
@@ -1095,9 +1109,12 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
       top_model_by_volume: model_series[0] ? { model: model_series[0].model, units: model_series[0].total_units } : null,
       top_model_by_revenue: sortedByRevenue[0] ? { model: sortedByRevenue[0].model, revenue: sortedByRevenue[0].total_revenue } : null,
       avg_order_value: sales.length > 0 ? Math.round((totalSalesRevenue / sales.length) * 100) / 100 : 0,
+      avg_selling_price_per_tv: totalSalesUnits > 0 ? Math.round((totalSalesRevenue / totalSalesUnits) * 100) / 100 : 0,
       collection_rate: totalSalesRevenue > 0 ? Math.round((totalPaid / totalSalesRevenue) * 1000) / 10 : 0,
       total_sales_units: totalSalesUnits,
       total_collected: Math.round(totalPaid * 100) / 100,
+      net_profit_before_gst: summary.net_profit_before_gst ?? summary.net_profit,
+      net_profit_after_gst: summary.net_profit_after_gst,
     };
 
     return {

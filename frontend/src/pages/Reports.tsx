@@ -107,6 +107,8 @@ export default function Reports() {
   const grossMargin = totalSales > 0 ? ((grossProfit / totalSales) * 100).toFixed(1) : "0.0";
   const netMargin = totalSales > 0 ? ((netProfit / totalSales) * 100).toFixed(1) : "0.0";
   const netMarginAfterGst = totalSales > 0 ? ((netProfitAfterGst / totalSales) * 100).toFixed(1) : "0.0";
+  const totalUnitsSold = summary.total_units_sold ?? executiveKpis?.total_sales_units ?? modelSeries.reduce((s: number, m: any) => s + (m.total_units || 0), 0);
+  const avgSellingPricePerTv = totalUnitsSold > 0 ? Math.round(totalSales / totalUnitsSold) : 0;
 
   const totalExpCalc = Object.values(expenseByCategory).reduce(
     (a: number, b: any) => a + Number(b),
@@ -183,28 +185,33 @@ export default function Reports() {
       "Month",
       "Sales Revenue (INR)",
       "Units Sold",
+      "Avg Price / TV (INR)",
       "Purchases PO (INR)",
       "COGS (INR)",
       "Gross Profit (INR)",
       "Margin Pct",
+      "Net Profit Pre-GST (INR)",
       "GST Payable 18% (INR)",
       "Net Profit After GST (INR)",
       "Top Selling Model"
     ];
     const rows = filteredMonthlyBreakdown.map((mb: any) => {
+      const asp = mb.avg_selling_price || (mb.units > 0 ? Math.round(mb.sales / mb.units) : 0);
       const diff = mb.net_diff !== undefined ? mb.net_diff : (mb.sales - mb.purchases);
       const gst = mb.gst_payable !== undefined ? mb.gst_payable : Math.max(0, Math.round(((diff * 18) / 118) * 100) / 100);
-      const netPre = mb.net_profit_before_gst !== undefined ? mb.net_profit_before_gst : mb.net_profit || 0;
+      const netPre = mb.net_profit_before_gst !== undefined ? mb.net_profit_before_gst : (mb.net_profit !== undefined ? mb.net_profit : (mb.gross_profit - (mb.expenses || 0)));
       const netPost = mb.net_profit_after_gst !== undefined ? mb.net_profit_after_gst : (netPre - gst);
 
       return [
         mb.month,
         mb.sales,
         mb.units,
+        asp,
         mb.purchases,
         mb.cogs,
         mb.gross_profit,
         mb.sales > 0 ? ((mb.gross_profit / mb.sales) * 100).toFixed(1) + "%" : "0.0%",
+        netPre,
         gst,
         netPost,
         `"${(mb.top_model || '').replace(/"/g, '""')}"`
@@ -287,57 +294,85 @@ export default function Reports() {
         </div>
 
         {/* EXECUTIVE DISTRIBUTION HIGHLIGHTS */}
-        {executiveKpis && (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "var(--s4)" }}>
-            <div className="card" style={{ padding: "var(--s4)", borderLeft: "4px solid var(--brand)" }}>
-              <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--muted)", letterSpacing: "0.5px" }}>
-                🏆 Top Model By Volume
-              </div>
-              <div style={{ fontSize: 18, fontWeight: 800, color: "var(--brand)", marginTop: 4 }}>
-                {executiveKpis.top_model_by_volume ? executiveKpis.top_model_by_volume.model : "—"}
-              </div>
-              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
-                {executiveKpis.top_model_by_volume ? `${executiveKpis.top_model_by_volume.units} units sold` : "No sales yet"}
-              </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "var(--s4)" }}>
+          {/* Net Profit (After GST) */}
+          <div className="card" style={{ padding: "var(--s4)", borderLeft: `4px solid ${netProfitAfterGst >= 0 ? "var(--success)" : "var(--error)"}` }}>
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--muted)", letterSpacing: "0.5px" }}>
+              💰 Net Profit (After GST)
             </div>
-
-            <div className="card" style={{ padding: "var(--s4)", borderLeft: "4px solid var(--success)" }}>
-              <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--muted)", letterSpacing: "0.5px" }}>
-                💎 Highest Grossing Model
-              </div>
-              <div style={{ fontSize: 18, fontWeight: 800, color: "var(--success)", marginTop: 4 }}>
-                {executiveKpis.top_model_by_revenue ? executiveKpis.top_model_by_revenue.model : "—"}
-              </div>
-              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
-                {executiveKpis.top_model_by_revenue ? formatINR(executiveKpis.top_model_by_revenue.revenue) : "₹0"} in gross revenue
-              </div>
+            <div style={{ fontSize: 22, fontWeight: 900, color: netProfitAfterGst >= 0 ? "var(--success)" : "var(--error)", marginTop: 4 }}>
+              {formatINR(netProfitAfterGst)}
             </div>
-
-            <div className="card" style={{ padding: "var(--s4)", borderLeft: "4px solid var(--warning)" }}>
-              <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--muted)", letterSpacing: "0.5px" }}>
-                💳 Average Invoice Value (AOV)
-              </div>
-              <div style={{ fontSize: 18, fontWeight: 800, color: "var(--warning)", marginTop: 4 }}>
-                {formatINR(executiveKpis.avg_order_value)}
-              </div>
-              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
-                Across {summary.sales_count || 0} wholesale dealer dispatches
-              </div>
-            </div>
-
-            <div className="card" style={{ padding: "var(--s4)", borderLeft: "4px solid #8b5cf6" }}>
-              <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--muted)", letterSpacing: "0.5px" }}>
-                📈 Cash Collection Efficiency
-              </div>
-              <div style={{ fontSize: 18, fontWeight: 800, color: "#8b5cf6", marginTop: 4 }}>
-                {executiveKpis.collection_rate}%
-              </div>
-              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
-                {formatINR(executiveKpis.total_collected)} collected of {formatINR(totalSales)}
-              </div>
+            <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+              Pre-GST: {formatINR(netProfit)} · Margin: {netMarginAfterGst}%
             </div>
           </div>
-        )}
+
+          {/* Avg Selling Price (ASP) per TV */}
+          <div className="card" style={{ padding: "var(--s4)", borderLeft: "4px solid var(--brand)" }}>
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--muted)", letterSpacing: "0.5px" }}>
+              📺 Avg Selling Price / TV
+            </div>
+            <div style={{ fontSize: 22, fontWeight: 900, color: "var(--brand)", marginTop: 4 }}>
+              {formatINR(avgSellingPricePerTv)}
+            </div>
+            <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+              Sales / Units ({totalUnitsSold} TVs sold across {formatINR(totalSales)})
+            </div>
+          </div>
+
+          {/* Top Model By Volume */}
+          <div className="card" style={{ padding: "var(--s4)", borderLeft: "4px solid #3b82f6" }}>
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--muted)", letterSpacing: "0.5px" }}>
+              🏆 Top Model By Volume
+            </div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: "var(--on-surface)", marginTop: 4 }}>
+              {executiveKpis?.top_model_by_volume ? executiveKpis.top_model_by_volume.model : "—"}
+            </div>
+            <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+              {executiveKpis?.top_model_by_volume ? `${executiveKpis.top_model_by_volume.units} units sold` : "No sales yet"}
+            </div>
+          </div>
+
+          {/* Highest Grossing Model */}
+          <div className="card" style={{ padding: "var(--s4)", borderLeft: "4px solid #10b981" }}>
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--muted)", letterSpacing: "0.5px" }}>
+              💎 Highest Grossing Model
+            </div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: "#10b981", marginTop: 4 }}>
+              {executiveKpis?.top_model_by_revenue ? executiveKpis.top_model_by_revenue.model : "—"}
+            </div>
+            <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+              {executiveKpis?.top_model_by_revenue ? formatINR(executiveKpis.top_model_by_revenue.revenue) : "₹0"} in gross revenue
+            </div>
+          </div>
+
+          {/* Average Invoice Value (AOV) */}
+          <div className="card" style={{ padding: "var(--s4)", borderLeft: "4px solid var(--warning)" }}>
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--muted)", letterSpacing: "0.5px" }}>
+              💳 Average Invoice Value (AOV)
+            </div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: "var(--warning)", marginTop: 4 }}>
+              {formatINR(executiveKpis?.avg_order_value || (summary.sales_count > 0 ? Math.round(totalSales / summary.sales_count) : 0))}
+            </div>
+            <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+              Across {summary.sales_count || 0} wholesale dealer dispatches
+            </div>
+          </div>
+
+          {/* Cash Collection Efficiency */}
+          <div className="card" style={{ padding: "var(--s4)", borderLeft: "4px solid #8b5cf6" }}>
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--muted)", letterSpacing: "0.5px" }}>
+              📈 Cash Collection Efficiency
+            </div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: "#8b5cf6", marginTop: 4 }}>
+              {executiveKpis?.collection_rate || 0}%
+            </div>
+            <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+              {formatINR(executiveKpis?.total_collected || 0)} collected of {formatINR(totalSales)}
+            </div>
+          </div>
+        </div>
 
         {/* 1. MONTH-OVER-MONTH (MoM) COMPARISON CARDS */}
         {momComparison ? (
@@ -382,7 +417,60 @@ export default function Reports() {
                 </div>
               </div>
 
-              {/* Gross Margin MoM */}
+              {/* Avg Selling Price per TV MoM */}
+              <div className="card" style={{ padding: "var(--s4)" }}>
+                <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, textTransform: "uppercase" }}>
+                  Avg Price / TV ({momComparison.current_month})
+                </div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: "var(--brand)", marginTop: 4 }}>
+                  {formatINR(momComparison.current_asp || (momComparison.current_units > 0 ? Math.round(momComparison.current_sales / momComparison.current_units) : 0))}
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, fontSize: 13 }}>
+                  {momComparison.asp_growth_pct !== undefined ? (
+                    <span
+                      className={`badge ${momComparison.asp_growth_pct >= 0 ? "badge-success" : "badge-error"}`}
+                      style={{ fontWeight: 700 }}
+                    >
+                      {momComparison.asp_growth_pct >= 0 ? `▲ +${momComparison.asp_growth_pct}%` : `▼ ${momComparison.asp_growth_pct}%`}
+                    </span>
+                  ) : null}
+                  <span style={{ color: "var(--muted)", fontSize: 12 }}>
+                    vs prev ({formatINR(momComparison.previous_asp || (momComparison.previous_units > 0 ? Math.round(momComparison.previous_sales / momComparison.previous_units) : 0))})
+                  </span>
+                </div>
+              </div>
+
+              {/* Net Profit After GST MoM */}
+              <div className="card" style={{ padding: "var(--s4)" }}>
+                <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, textTransform: "uppercase" }}>
+                  Net Profit After GST ({momComparison.current_month})
+                </div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: (momComparison.current_net_profit !== undefined ? momComparison.current_net_profit : momComparison.current_profit) >= 0 ? "var(--success)" : "var(--error)", marginTop: 4 }}>
+                  {formatINR(momComparison.current_net_profit !== undefined ? momComparison.current_net_profit : momComparison.current_profit)}
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, fontSize: 13 }}>
+                  {momComparison.net_profit_growth_pct !== undefined ? (
+                    <span
+                      className={`badge ${momComparison.net_profit_growth_pct >= 0 ? "badge-success" : "badge-error"}`}
+                      style={{ fontWeight: 700 }}
+                    >
+                      {momComparison.net_profit_growth_pct >= 0 ? `▲ +${momComparison.net_profit_growth_pct}%` : `▼ ${momComparison.net_profit_growth_pct}%`}
+                    </span>
+                  ) : (
+                    <span
+                      className={`badge ${(momComparison.profit_growth_pct || 0) >= 0 ? "badge-success" : "badge-error"}`}
+                      style={{ fontWeight: 700 }}
+                    >
+                      {(momComparison.profit_growth_pct || 0) >= 0 ? `▲ +${momComparison.profit_growth_pct}%` : `▼ ${momComparison.profit_growth_pct}%`}
+                    </span>
+                  )}
+                  <span style={{ color: "var(--muted)", fontSize: 12 }}>
+                    vs prev ({formatINR(momComparison.previous_net_profit !== undefined ? momComparison.previous_net_profit : momComparison.previous_profit)})
+                  </span>
+                </div>
+              </div>
+
+              {/* Gross Profit MoM */}
               <div className="card" style={{ padding: "var(--s4)" }}>
                 <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, textTransform: "uppercase" }}>
                   Gross Profit ({momComparison.current_month})
@@ -676,10 +764,12 @@ export default function Reports() {
                   <th>Month</th>
                   <th style={{ textAlign: "right" }}>Sales Revenue</th>
                   <th style={{ textAlign: "right" }}>Units Sold</th>
+                  <th style={{ textAlign: "right" }}>Avg Price / TV</th>
                   <th style={{ textAlign: "right" }}>Purchases (PO)</th>
                   <th style={{ textAlign: "right" }}>COGS</th>
                   <th style={{ textAlign: "right" }}>Gross Profit</th>
                   <th style={{ textAlign: "right" }}>GST Payable (18%)</th>
+                  <th style={{ textAlign: "right" }}>Net Profit (Pre-GST)</th>
                   <th style={{ textAlign: "right" }}>Net After GST</th>
                   <th style={{ textAlign: "right" }}>Margin</th>
                   <th>Top Model</th>
@@ -688,16 +778,17 @@ export default function Reports() {
               <tbody>
                 {filteredMonthlyBreakdown.length === 0 ? (
                   <tr>
-                    <td colSpan={10} style={{ textAlign: "center", color: "var(--muted)", padding: "var(--s5)" }}>
+                    <td colSpan={12} style={{ textAlign: "center", color: "var(--muted)", padding: "var(--s5)" }}>
                       No monthly transactions found for selected period.
                     </td>
                   </tr>
                 ) : (
                   filteredMonthlyBreakdown.map((mb: any) => {
                     const marginPct = mb.sales > 0 ? ((mb.gross_profit / mb.sales) * 100).toFixed(1) : "0.0";
+                    const asp = mb.avg_selling_price || (mb.units > 0 ? Math.round(mb.sales / mb.units) : 0);
                     const diff = mb.net_diff !== undefined ? mb.net_diff : (mb.sales - mb.purchases);
                     const gst = mb.gst_payable !== undefined ? mb.gst_payable : Math.max(0, Math.round(((diff * 18) / 118) * 100) / 100);
-                    const netPre = mb.net_profit_before_gst !== undefined ? mb.net_profit_before_gst : mb.net_profit || 0;
+                    const netPre = mb.net_profit_before_gst !== undefined ? mb.net_profit_before_gst : (mb.net_profit !== undefined ? mb.net_profit : (mb.gross_profit - (mb.expenses || 0)));
                     const netPost = mb.net_profit_after_gst !== undefined ? mb.net_profit_after_gst : (netPre - gst);
 
                     return (
@@ -707,6 +798,9 @@ export default function Reports() {
                           {formatINR(mb.sales)}
                         </td>
                         <td style={{ textAlign: "right", fontWeight: 600 }}>{mb.units} units</td>
+                        <td style={{ textAlign: "right", fontWeight: 700, color: "var(--brand)" }}>
+                          {formatINR(asp)}
+                        </td>
                         <td style={{ textAlign: "right", color: "var(--warning)" }}>{formatINR(mb.purchases)}</td>
                         <td style={{ textAlign: "right", color: "var(--muted)" }}>{formatINR(mb.cogs)}</td>
                         <td style={{ textAlign: "right", fontWeight: 700, color: mb.gross_profit >= 0 ? "var(--success)" : "var(--error)" }}>
@@ -714,6 +808,9 @@ export default function Reports() {
                         </td>
                         <td style={{ textAlign: "right", fontWeight: 700, color: gst > 0 ? "#d97706" : "var(--muted)" }}>
                           {formatINR(gst)}
+                        </td>
+                        <td style={{ textAlign: "right", fontWeight: 700, color: netPre >= 0 ? "var(--success)" : "var(--error)" }}>
+                          {formatINR(netPre)}
                         </td>
                         <td style={{ textAlign: "right", fontWeight: 800, color: netPost >= 0 ? "var(--success)" : "var(--error)" }}>
                           {formatINR(netPost)}

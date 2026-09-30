@@ -1008,6 +1008,11 @@ async def reports(user=Depends(current_user)):
                 top_m = model
         monthly_metrics[m]["top_model"] = top_m or "None"
 
+    expenses_by_month = {}
+    for e in expenses:
+        em = get_month_key(e.get("date"))
+        expenses_by_month[em] = round(expenses_by_month.get(em, 0.0) + e.get("amount", 0.0), 2)
+
     month_keys = sorted(list(set(list(sales_by_month.keys()) + list(purchases_by_month.keys()))))
     if not month_keys:
         month_keys = [datetime.now(timezone.utc).strftime("%Y-%m")]
@@ -1024,10 +1029,37 @@ async def reports(user=Depends(current_user)):
         })
     model_series.sort(key=lambda x: x["total_units"], reverse=True)
 
-    monthly_breakdown = [monthly_metrics.get(m, {
-        "month": m, "sales": sales_by_month.get(m, 0.0), "purchases": purchases_by_month.get(m, 0.0),
-        "cogs": 0.0, "gross_profit": 0.0, "units": sales_units_by_month.get(m, 0), "top_model": "None"
-    }) for m in month_keys]
+    gst_by_month = {item["month"]: item for item in summary.get("monthly_gst_breakdown", [])}
+    monthly_breakdown = []
+    for m in month_keys:
+        ms = sales_by_month.get(m, 0.0)
+        mp = purchases_by_month.get(m, 0.0)
+        mu = sales_units_by_month.get(m, 0)
+        mcogs = monthly_metrics.get(m, {}).get("cogs", 0.0)
+        mgross = monthly_metrics.get(m, {}).get("gross_profit", 0.0)
+        mexp = expenses_by_month.get(m, 0.0)
+        mnet_pre = round(mgross - mexp, 2)
+        gst_item = gst_by_month.get(m, {})
+        mgst_pay = gst_item.get("gst_payable", 0.0)
+        mnet_post = round(mnet_pre - mgst_pay, 2)
+        masp = round(ms / mu, 2) if mu > 0 else 0.0
+        mtop = monthly_metrics.get(m, {}).get("top_model", "None")
+        monthly_breakdown.append({
+            "month": m,
+            "sales": ms,
+            "purchases": mp,
+            "units": mu,
+            "cogs": mcogs,
+            "gross_profit": mgross,
+            "expenses": mexp,
+            "net_profit": mnet_pre,
+            "net_profit_before_gst": mnet_pre,
+            "gst_payable": mgst_pay,
+            "net_profit_after_gst": mnet_post,
+            "avg_selling_price": masp,
+            "top_model": mtop,
+            "accumulated_credit": gst_item.get("accumulated_credit", 0.0),
+        })
 
     mom_comparison = None
     if len(monthly_breakdown) >= 2:
@@ -1035,6 +1067,11 @@ async def reports(user=Depends(current_user)):
         prev = monthly_breakdown[-2]
         s_growth = round(((curr["sales"] - prev["sales"]) / prev["sales"] * 100), 1) if prev["sales"] > 0 else (100.0 if curr["sales"] > 0 else 0.0)
         u_growth = round(((curr["units"] - prev["units"]) / prev["units"] * 100), 1) if prev["units"] > 0 else (100.0 if curr["units"] > 0 else 0.0)
+        p_growth = round(((curr["gross_profit"] - prev["gross_profit"]) / abs(prev["gross_profit"]) * 100), 1) if prev["gross_profit"] != 0 else (100.0 if curr["gross_profit"] > 0 else 0.0)
+        np_growth = round(((curr["net_profit_after_gst"] - prev["net_profit_after_gst"]) / abs(prev["net_profit_after_gst"]) * 100), 1) if prev["net_profit_after_gst"] != 0 else (100.0 if curr["net_profit_after_gst"] > 0 else 0.0)
+        curr_asp = curr["avg_selling_price"]
+        prev_asp = prev["avg_selling_price"]
+        asp_growth = round(((curr_asp - prev_asp) / prev_asp * 100), 1) if prev_asp > 0 else 0.0
         mom_comparison = {
             "current_month": curr["month"],
             "previous_month": prev["month"],
@@ -1046,6 +1083,13 @@ async def reports(user=Depends(current_user)):
             "units_growth_pct": u_growth,
             "current_profit": curr["gross_profit"],
             "previous_profit": prev["gross_profit"],
+            "profit_growth_pct": p_growth,
+            "current_net_profit": curr["net_profit_after_gst"],
+            "previous_net_profit": prev["net_profit_after_gst"],
+            "net_profit_growth_pct": np_growth,
+            "current_asp": curr_asp,
+            "previous_asp": prev_asp,
+            "asp_growth_pct": asp_growth,
         }
 
     # Top wholesale dealers leaderboard
@@ -1121,9 +1165,12 @@ async def reports(user=Depends(current_user)):
         "top_model_by_volume": {"model": model_series[0]["model"], "units": model_series[0]["total_units"]} if model_series else None,
         "top_model_by_revenue": {"model": sorted_by_rev[0]["model"], "revenue": sorted_by_rev[0]["total_revenue"]} if sorted_by_rev else None,
         "avg_order_value": round(tot_sales_rev / len(sales), 2) if sales else 0.0,
+        "avg_selling_price_per_tv": round(tot_sales_rev / tot_sales_units, 2) if tot_sales_units > 0 else 0.0,
         "collection_rate": round((tot_paid / tot_sales_rev * 100), 1) if tot_sales_rev > 0 else 0.0,
         "total_sales_units": tot_sales_units,
         "total_collected": round(tot_paid, 2),
+        "net_profit_before_gst": summary.get("net_profit_before_gst", summary.get("net_profit", 0.0)),
+        "net_profit_after_gst": summary.get("net_profit_after_gst", 0.0),
     }
 
     # expense by category
