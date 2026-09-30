@@ -102,7 +102,7 @@ export default function Reports() {
   const totalExpenses = summary.total_expenses || 0;
   const netProfit = summary.net_profit || (grossProfit - totalExpenses);
   const totalPurchases = summary.total_purchases || 0;
-  const totalGstPayable = summary.gst_payable !== undefined ? summary.gst_payable : Math.max(0, Math.round((totalSales - totalPurchases) * 0.18 * 100) / 100);
+  const totalGstPayable = summary.gst_payable !== undefined ? summary.gst_payable : Math.max(0, Math.round(((totalSales - totalPurchases) * 18 / 118) * 100) / 100);
   const netProfitAfterGst = summary.net_profit_after_gst !== undefined ? summary.net_profit_after_gst : (netProfit - totalGstPayable);
   const grossMargin = totalSales > 0 ? ((grossProfit / totalSales) * 100).toFixed(1) : "0.0";
   const netMargin = totalSales > 0 ? ((netProfit / totalSales) * 100).toFixed(1) : "0.0";
@@ -193,7 +193,7 @@ export default function Reports() {
     ];
     const rows = filteredMonthlyBreakdown.map((mb: any) => {
       const diff = mb.net_diff !== undefined ? mb.net_diff : (mb.sales - mb.purchases);
-      const gst = mb.gst_payable !== undefined ? mb.gst_payable : Math.max(0, Math.round(diff * 0.18 * 100) / 100);
+      const gst = mb.gst_payable !== undefined ? mb.gst_payable : Math.max(0, Math.round(((diff * 18) / 118) * 100) / 100);
       const netPre = mb.net_profit_before_gst !== undefined ? mb.net_profit_before_gst : mb.net_profit || 0;
       const netPost = mb.net_profit_after_gst !== undefined ? mb.net_profit_after_gst : (netPre - gst);
 
@@ -696,7 +696,7 @@ export default function Reports() {
                   filteredMonthlyBreakdown.map((mb: any) => {
                     const marginPct = mb.sales > 0 ? ((mb.gross_profit / mb.sales) * 100).toFixed(1) : "0.0";
                     const diff = mb.net_diff !== undefined ? mb.net_diff : (mb.sales - mb.purchases);
-                    const gst = mb.gst_payable !== undefined ? mb.gst_payable : Math.max(0, Math.round(diff * 0.18 * 100) / 100);
+                    const gst = mb.gst_payable !== undefined ? mb.gst_payable : Math.max(0, Math.round(((diff * 18) / 118) * 100) / 100);
                     const netPre = mb.net_profit_before_gst !== undefined ? mb.net_profit_before_gst : mb.net_profit || 0;
                     const netPost = mb.net_profit_after_gst !== undefined ? mb.net_profit_after_gst : (netPre - gst);
 

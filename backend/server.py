@@ -827,8 +827,10 @@ async def _compute_summary():
             purchases_by_month[m] = round(purchases_by_month.get(m, 0.0) + float(o.get("total", 0)), 2)
             months_set.add(m)
 
-    # Chronological GST carryover calculation:
-    # If purchase > sales, (sales - purchase) * 18% is negative -> this is GST Receivable (ITC balance on portal).
+    # Chronological GST carryover calculation (Sales and purchases are GST-inclusive @ 18%):
+    # Taxable base = (sales - purchase) / 1.18
+    # Raw GST = (sales - purchase) * 18 / 118
+    # If purchase > sales, this difference is negative -> this is GST Receivable (ITC balance on portal).
     # GST Receivable NEVER changes or increases net profit (0 subtracted).
     # Carried forward GST receivable is subtracted from next month's GST payable.
     # If next month's GST payable > carried receivable, only then does the remaining payable impact that month's net profit!
@@ -838,7 +840,8 @@ async def _compute_summary():
         ms = sales_by_month.get(m, 0.0)
         mp = purchases_by_month.get(m, 0.0)
         diff = round(ms - mp, 2)
-        raw_gst = round(diff * 0.18, 2)
+        taxable_base = round(diff / 1.18, 2)
+        raw_gst = round((diff * 18) / 118, 2)
         opening_credit = accumulated_credit
         month_payable = 0.0
         credit_used = 0.0
@@ -864,6 +867,7 @@ async def _compute_summary():
             "sales": ms,
             "purchases": mp,
             "net_diff": diff,
+            "taxable_base": taxable_base,
             "gst_rate": 0.18,
             "raw_gst": raw_gst,
             "opening_credit": opening_credit,
@@ -882,13 +886,15 @@ async def _compute_summary():
     current_month_key = datetime.now(timezone.utc).strftime("%Y-%m")
     cur_m = next((item for item in monthly_gst_breakdown if item["month"] == current_month_key), None)
     if not cur_m:
+        cur_m_diff = round(sales_by_month.get(current_month_key, 0.0) - purchases_by_month.get(current_month_key, 0.0), 2)
         cur_m = {
             "month": current_month_key,
             "sales": sales_by_month.get(current_month_key, 0.0),
             "purchases": purchases_by_month.get(current_month_key, 0.0),
-            "net_diff": round(sales_by_month.get(current_month_key, 0.0) - purchases_by_month.get(current_month_key, 0.0), 2),
+            "net_diff": cur_m_diff,
+            "taxable_base": round(cur_m_diff / 1.18, 2),
             "gst_rate": 0.18,
-            "raw_gst": round((sales_by_month.get(current_month_key, 0.0) - purchases_by_month.get(current_month_key, 0.0)) * 0.18, 2),
+            "raw_gst": round((cur_m_diff * 18) / 118, 2),
             "opening_credit": accumulated_credit,
             "credit_used": 0.0,
             "gst_receivable": 0.0,
@@ -911,7 +917,7 @@ async def _compute_summary():
         "net_profit": net_profit,
         "net_profit_before_gst": net_profit_before_gst,
         "gst_rate": 0.18,
-        "gst_taxable_base": round(total_sales - total_purchases, 2),
+        "gst_taxable_base": round((total_sales - total_purchases) / 1.18, 2),
         "gst_payable": total_gst_payable,
         "gst_receivable": active_gst_receivable,
         "accumulated_credit": active_gst_receivable,

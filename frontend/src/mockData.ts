@@ -824,8 +824,10 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
       new Set([...Object.keys(sales_by_month), ...Object.keys(purchases_by_month)])
     ).filter(Boolean).sort();
 
-    // Chronological GST carryover calculation:
-    // If purchase > sales, (sales - purchase) * 18% is negative -> this is GST Receivable (ITC balance on portal).
+    // Chronological GST carryover calculation (Sales and purchases are GST-inclusive @ 18%):
+    // Taxable base = (sales - purchase) / 1.18
+    // Raw GST = (sales - purchase) * 18 / 118
+    // If purchase > sales, this difference is negative -> this is GST Receivable (ITC balance on portal).
     // GST Receivable NEVER changes or increases net profit (0 subtracted).
     // Carried forward GST receivable is subtracted from next month's GST payable.
     // If next month's GST payable > carried receivable, only then does the remaining payable impact that month's net profit!
@@ -834,7 +836,8 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
       const s = sales_by_month[m] || 0;
       const p = purchases_by_month[m] || 0;
       const diff = Math.round((s - p) * 100) / 100;
-      const rawGst = Math.round(diff * 0.18 * 100) / 100;
+      const taxableBase = Math.round((diff / 1.18) * 100) / 100;
+      const rawGst = Math.round(((diff * 18) / 118) * 100) / 100;
       const cogsM = monthly_metrics[m]?.cogs || 0;
       const grossM = monthly_metrics[m]?.gross_profit || Math.round((s - cogsM) * 100) / 100;
       const expM = expenses_by_month[m] || 0;
@@ -872,6 +875,7 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
         sales: s,
         purchases: p,
         net_diff: diff,
+        taxable_base: taxableBase,
         gst_rate: 0.18,
         raw_gst: rawGst, // negative if purchases > sales (GST Receivable)
         opening_credit: openingCredit,
@@ -900,13 +904,15 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
 
     // Current Month GST
     const currentMonthKey = new Date().toISOString().slice(0, 7);
+    const curDiff = Math.round(((sales_by_month[currentMonthKey] || 0) - (purchases_by_month[currentMonthKey] || 0)) * 100) / 100;
     const current_month_gst = monthly_breakdown.find(mb => mb.month === currentMonthKey) || {
       month: currentMonthKey,
       sales: sales_by_month[currentMonthKey] || 0,
       purchases: purchases_by_month[currentMonthKey] || 0,
-      net_diff: Math.round(((sales_by_month[currentMonthKey] || 0) - (purchases_by_month[currentMonthKey] || 0)) * 100) / 100,
+      net_diff: curDiff,
+      taxable_base: Math.round((curDiff / 1.18) * 100) / 100,
       gst_rate: 0.18,
-      raw_gst: Math.round(((sales_by_month[currentMonthKey] || 0) - (purchases_by_month[currentMonthKey] || 0)) * 0.18 * 100) / 100,
+      raw_gst: Math.round(((curDiff * 18) / 118) * 100) / 100,
       opening_credit: accumulated_credit,
       credit_used: 0,
       gst_receivable: 0,
@@ -954,7 +960,7 @@ export function handleMockApi(path: string, method = "GET", body?: any): any {
       net_profit,
       net_profit_before_gst,
       gst_rate: 0.18,
-      gst_taxable_base: Math.round((total_sales - total_purchases) * 100) / 100,
+      gst_taxable_base: Math.round(((total_sales - total_purchases) / 1.18) * 100) / 100,
       gst_payable: total_gst_payable,
       gst_receivable: active_gst_receivable,
       accumulated_credit: active_gst_receivable,

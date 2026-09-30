@@ -214,7 +214,7 @@ export default function Dashboard() {
             <div>
               <h2 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>📊 Monthly GST Overview (Different for Each Month)</h2>
               <p style={{ color: "var(--muted)", fontSize: 13, margin: "2px 0 0 0" }}>
-                Each month has a different GST based on (Sales - Purchases) × 18%. Excess purchase GST is credited on government portal and offsets next month's payable.
+                Each month has a different GST based on (Sales - Purchases) × 18/118 (GST-inclusive). Excess purchase GST is credited on government portal and offsets next month's payable.
               </p>
             </div>
             <div className="chip-bar" style={{ display: "flex", gap: 4, overflowX: "auto", maxWidth: "100%" }}>
@@ -243,8 +243,8 @@ export default function Dashboard() {
                   <th style={{ padding: "var(--s3) var(--s4)" }}>Month</th>
                   <th style={{ padding: "var(--s3) var(--s4)", textAlign: "right" }}>Net Sales</th>
                   <th style={{ padding: "var(--s3) var(--s4)", textAlign: "right" }}>Net Purchases</th>
-                  <th style={{ padding: "var(--s3) var(--s4)", textAlign: "right" }}>Taxable Base (Sales - Purchase)</th>
-                  <th style={{ padding: "var(--s3) var(--s4)", textAlign: "right" }}>Raw GST (18%)</th>
+                  <th style={{ padding: "var(--s3) var(--s4)", textAlign: "right" }}>Taxable Base ((Sales - Purchase) / 1.18)</th>
+                  <th style={{ padding: "var(--s3) var(--s4)", textAlign: "right" }}>Raw GST (18% Incl.)</th>
                   <th style={{ padding: "var(--s3) var(--s4)", textAlign: "right" }}>Credit Offset</th>
                   <th style={{ padding: "var(--s3) var(--s4)", textAlign: "right" }}>GST Payable (Portal)</th>
                   <th style={{ padding: "var(--s3) var(--s4)", textAlign: "right" }}>Carried to Next Month</th>
@@ -263,7 +263,8 @@ export default function Dashboard() {
                 ) : (
                   (selectedGstMonth === "all" ? monthlyGstList : monthlyGstList.filter((m: any) => m.month === selectedGstMonth)).map((m: any) => {
                     const diff = m.net_diff !== undefined ? m.net_diff : (m.sales - m.purchases);
-                    const rawGst = m.raw_gst !== undefined ? m.raw_gst : Math.round(diff * 0.18 * 100) / 100;
+                    const taxableBase = m.taxable_base !== undefined ? m.taxable_base : Math.round((diff / 1.18) * 100) / 100;
+                    const rawGst = m.raw_gst !== undefined ? m.raw_gst : Math.round(((diff * 18) / 118) * 100) / 100;
                     const creditUsed = m.credit_used || 0;
                     const gst = m.gst_payable || 0;
                     const carriedFwd = m.accumulated_credit || 0;
@@ -281,8 +282,8 @@ export default function Dashboard() {
                         <td style={{ padding: "var(--s3) var(--s4)", textAlign: "right", color: "var(--warning)", fontWeight: 600 }}>
                           {formatINR(m.purchases || 0)}
                         </td>
-                        <td style={{ padding: "var(--s3) var(--s4)", textAlign: "right", fontWeight: 600, color: diff >= 0 ? "var(--on-surface)" : "var(--error)" }}>
-                          {formatINR(diff)}
+                        <td style={{ padding: "var(--s3) var(--s4)", textAlign: "right", fontWeight: 600, color: taxableBase >= 0 ? "var(--on-surface)" : "var(--error)" }}>
+                          {formatINR(taxableBase)}
                         </td>
                         <td style={{ padding: "var(--s3) var(--s4)", textAlign: "right", fontWeight: 700, color: rawGst < 0 ? "var(--info)" : "var(--on-surface)" }}>
                           {rawGst < 0 ? `- ${formatINR(Math.abs(rawGst))}` : `+ ${formatINR(rawGst)}`}
